@@ -29,7 +29,7 @@ services:
       PORT: 4000
       CORS_ORIGIN: http://localhost:8080
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-in-production}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
       JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-before-production}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-local-dev-encryption-key-change-before-production}
