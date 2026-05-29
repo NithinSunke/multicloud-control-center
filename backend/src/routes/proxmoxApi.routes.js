@@ -89,6 +89,7 @@ import {
   deployTerraformStack,
   destroyTerraformStack,
   getTerraformStacks,
+  planTerraformStack,
   removeTerraformStack,
   uploadTerraformStackArchive,
   validateTerraformStack,
@@ -138,6 +139,7 @@ router.post(
   uploadTerraformStackArchive,
 );
 router.post('/terraform-stacks/:stackId/validate', validateTerraformStack);
+router.post('/terraform-stacks/:stackId/plan', planTerraformStack);
 router.post('/terraform-stacks/:stackId/deploy', deployTerraformStack);
 router.post('/terraform-stacks/:stackId/destroy', destroyTerraformStack);
 router.delete('/terraform-stacks/:stackId', removeTerraformStack);

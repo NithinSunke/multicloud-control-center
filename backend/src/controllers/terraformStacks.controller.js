@@ -45,6 +45,19 @@ export async function validateTerraformStack(req, res, next) {
   }
 }
 
+export async function planTerraformStack(req, res, next) {
+  try {
+    const result = await runTerraformStackAction({
+      stackId: req.params.stackId,
+      action: 'plan',
+      user: currentUser(req),
+    });
+    res.json({ data: { ...result, message: result.stack.lastMessage } });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function deployTerraformStack(req, res, next) {
   try {
     const result = await runTerraformStackAction({

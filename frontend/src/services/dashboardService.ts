@@ -35,6 +35,13 @@ export function validateTerraformStack(stackId: string) {
   });
 }
 
+export function planTerraformStack(stackId: string) {
+  return apiRequest<{ data: TerraformStackActionResult }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/plan`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export function deployTerraformStack(stackId: string, confirmation: string) {
   return apiRequest<{ data: TerraformStackActionResult }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/deploy`, {
     method: 'POST',

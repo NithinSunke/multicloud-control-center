@@ -10259,7 +10259,7 @@ export function DashboardPage() {
     }
   }
 
-  async function runTerraformStack(stack: TerraformStack, action: 'validate' | 'deploy' | 'destroy') {
+  async function runTerraformStack(stack: TerraformStack, action: 'validate' | 'plan' | 'deploy' | 'destroy') {
     if ((action === 'deploy' || action === 'destroy') && terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id) {
       setTerraformError(`Type ${action === 'deploy' ? 'stack name' : 'stack name or ID'} to confirm ${action}.`);
       return;
@@ -10270,9 +10270,11 @@ export function DashboardPage() {
     try {
       const response = action === 'validate'
         ? await dashboardService.validateTerraformStack(stack.id)
-        : action === 'deploy'
-          ? await dashboardService.deployTerraformStack(stack.id, terraformConfirmation.trim())
-          : await dashboardService.destroyTerraformStack(stack.id, terraformConfirmation.trim());
+        : action === 'plan'
+          ? await dashboardService.planTerraformStack(stack.id)
+          : action === 'deploy'
+            ? await dashboardService.deployTerraformStack(stack.id, terraformConfirmation.trim())
+            : await dashboardService.destroyTerraformStack(stack.id, terraformConfirmation.trim());
       setTerraformStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
       setTerraformConfirmation('');
       setTerraformMessage(response.data.message);
@@ -24196,6 +24198,12 @@ export function DashboardPage() {
                                   label: busy ? 'Working...' : 'Validate / Init',
                                   disabled: busy,
                                   onClick: () => void runTerraformStack(stack, 'validate'),
+                                },
+                                {
+                                  label: 'Plan',
+                                  tone: 'primary',
+                                  disabled: busy,
+                                  onClick: () => void runTerraformStack(stack, 'plan'),
                                 },
                                 {
                                   label: 'Deploy',

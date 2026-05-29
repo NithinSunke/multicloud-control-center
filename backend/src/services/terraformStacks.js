@@ -302,7 +302,7 @@ async function getStackForRun(stackId) {
 }
 
 export async function runTerraformStackAction({ stackId, action, user, confirmation }) {
-  if (!['validate', 'deploy', 'destroy'].includes(action)) {
+  if (!['validate', 'plan', 'deploy', 'destroy'].includes(action)) {
     const error = new Error('Unsupported Terraform stack action.');
     error.status = 400;
     throw error;
@@ -336,6 +336,9 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
     await runStep('init', ['init', '-input=false']);
     if (action === 'validate') {
       await runStep('validate', ['validate', '-no-color']);
+    } else if (action === 'plan') {
+      await runStep('validate', ['validate', '-no-color']);
+      await runStep('plan', ['plan', '-input=false', '-no-color']);
     } else if (action === 'deploy') {
       await runStep('validate', ['validate', '-no-color']);
       await runStep('plan', ['plan', '-input=false', '-no-color', '-out=tfplan']);
@@ -346,9 +349,11 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
 
     const message = action === 'validate'
       ? 'Terraform stack initialized and validated.'
-      : action === 'deploy'
-        ? 'Terraform stack deployed.'
-        : 'Terraform stack destroyed.';
+      : action === 'plan'
+        ? 'Terraform plan completed.'
+        : action === 'deploy'
+          ? 'Terraform stack deployed.'
+          : 'Terraform stack destroyed.';
     const updated = await updateStack(stackId, {
       status: 'succeeded',
       lastMessage: message,
