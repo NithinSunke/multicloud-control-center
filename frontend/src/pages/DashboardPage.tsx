@@ -10192,6 +10192,16 @@ export function DashboardPage() {
   }, [activeTab, selectedConnectorId]);
 
   useEffect(() => {
+    if (activeTab !== 'terraformStacks' || !terraformStacks.some((stack) => stack.status === 'running')) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      void loadTerraformStacks();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [activeTab, terraformStacks]);
+
+  useEffect(() => {
     if (!createVmModalOpen) {
       return;
     }
@@ -10291,6 +10301,25 @@ export function DashboardPage() {
     setTerraformActionStackId(`${stack.id}:${action}`);
     setTerraformError('');
     setTerraformMessage('');
+    const startedAt = new Date().toISOString();
+    const optimisticRun = {
+      id: `${stack.id}-${action}-${Date.now()}`,
+      action,
+      status: 'running',
+      message: `${action} started.`,
+      startedAt,
+      finishedAt: null,
+      output: [`${action} started. (${startedAt})`],
+    };
+    setTerraformStacks((current) => current.map((item) => item.id === stack.id ? {
+      ...item,
+      status: 'running',
+      lastAction: action,
+      lastMessage: `${action} started.`,
+      lastRunAt: startedAt,
+      lastOutput: optimisticRun.output,
+      runs: [optimisticRun, ...(item.runs || [])],
+    } : item));
     try {
       const response = action === 'validate'
         ? await dashboardService.validateTerraformStack(stack.id)
@@ -24189,7 +24218,7 @@ export function DashboardPage() {
                   </thead>
                   <tbody>
                     {terraformStacks.length ? terraformStacks.map((stack) => {
-                      const busy = terraformActionStackId.startsWith(`${stack.id}:`) || stack.status === 'running';
+                      const busy = terraformActionStackId.startsWith(`${stack.id}:`);
                       return (
                         <tr key={stack.id}>
                           <td className="font-medium text-slate-900">
@@ -24264,18 +24293,47 @@ export function DashboardPage() {
               </div>
             </section>
 
-            {terraformStacks.some((stack) => stack.lastOutput?.length) ? (
+            {terraformStacks.some((stack) => (stack.runs?.length || stack.lastOutput?.length)) ? (
               <section className="pm-panel">
-                <h3 className="text-base font-semibold text-slate-950">Latest Stack Logs</h3>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Deployment Logs</h3>
+                    <p className="text-sm text-slate-600">Every validate, plan, deploy, and destroy run is kept separately for review.</p>
+                  </div>
+                  <button className="pm-button" disabled={terraformLoading} onClick={() => void loadTerraformStacks()} type="button">
+                    Refresh Logs
+                  </button>
+                </div>
                 <div className="mt-3 grid gap-4 xl:grid-cols-2">
-                  {terraformStacks.filter((stack) => stack.lastOutput?.length).slice(0, 4).map((stack) => (
-                    <article className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100" key={`${stack.id}-logs`}>
-                      <div className="mb-3 flex items-center justify-between gap-3">
-                        <strong className="text-sm text-white">{stack.name}</strong>
-                        <span className="text-slate-400">{stack.lastAction}</span>
+                  {terraformStacks.flatMap((stack) => {
+                    const runs = stack.runs?.length
+                      ? stack.runs
+                      : stack.lastOutput?.length
+                        ? [{
+                            id: `${stack.id}-latest`,
+                            action: stack.lastAction,
+                            status: stack.status,
+                            message: stack.lastMessage,
+                            startedAt: stack.lastRunAt,
+                            finishedAt: stack.status === 'running' ? null : stack.updatedAt,
+                            output: stack.lastOutput,
+                          }]
+                        : [];
+                    return runs.map((run) => ({ stack, run }));
+                  }).slice(0, 12).map(({ stack, run }) => (
+                    <article className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100" key={`${stack.id}-${run.id}`}>
+                      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <strong className="text-sm text-white">{stack.name}</strong>
+                          <p className="text-slate-400">{run.message || stack.lastMessage || '-'}</p>
+                        </div>
+                        <div className="text-right text-slate-400">
+                          <p className="font-semibold uppercase text-slate-200">{run.action}</p>
+                          <p>{run.status}{run.startedAt ? ` · ${formatDate(run.startedAt)}` : ''}</p>
+                        </div>
                       </div>
-                      <pre className="max-h-80 overflow-auto whitespace-pre-wrap font-mono leading-relaxed">
-                        {stack.lastOutput.slice(-120).join('\n')}
+                      <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-mono leading-relaxed">
+                        {(run.output || []).slice(-180).join('\n')}
                       </pre>
                     </article>
                   ))}

@@ -69,6 +69,93 @@ async function updateStack(stackId, patch) {
   return stacks[index];
 }
 
+function normalizeRuns(stack) {
+  if (Array.isArray(stack.runs)) {
+    return stack.runs;
+  }
+  if (Array.isArray(stack.lastOutput) && stack.lastOutput.length) {
+    return [{
+      id: `legacy-${stack.lastAction || 'run'}`,
+      action: stack.lastAction || 'run',
+      status: stack.status || 'unknown',
+      message: stack.lastMessage || '',
+      startedAt: stack.lastRunAt || stack.updatedAt || stack.createdAt || null,
+      finishedAt: stack.status === 'running' ? null : stack.updatedAt || null,
+      output: stack.lastOutput,
+    }];
+  }
+  return [];
+}
+
+async function createStackRun(stackId, { action, user, startedAt, message }) {
+  const run = {
+    id: randomUUID(),
+    action,
+    status: 'running',
+    message,
+    startedAt,
+    finishedAt: null,
+    user: user || 'admin',
+    output: [`${message} (${startedAt})`],
+  };
+  const stacks = await readMetadata();
+  const index = stacks.findIndex((stack) => stack.id === stackId);
+  if (index < 0) {
+    const error = new Error('Terraform stack not found.');
+    error.status = 404;
+    throw error;
+  }
+  const runs = [run, ...normalizeRuns(stacks[index])].slice(0, 25);
+  stacks[index] = {
+    ...stacks[index],
+    runs,
+    status: 'running',
+    lastAction: action,
+    lastMessage: message,
+    lastRunAt: startedAt,
+    lastOutput: run.output,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeMetadata(stacks);
+  return run;
+}
+
+async function updateStackRun(stackId, runId, patch = {}, outputLines = []) {
+  const stacks = await readMetadata();
+  const index = stacks.findIndex((stack) => stack.id === stackId);
+  if (index < 0) {
+    const error = new Error('Terraform stack not found.');
+    error.status = 404;
+    throw error;
+  }
+  const runs = normalizeRuns(stacks[index]);
+  const runIndex = runs.findIndex((run) => run.id === runId);
+  if (runIndex < 0) {
+    const error = new Error('Terraform stack run not found.');
+    error.status = 404;
+    throw error;
+  }
+  const existingOutput = Array.isArray(runs[runIndex].output) ? runs[runIndex].output : [];
+  const nextOutput = redactSecrets([...existingOutput, ...outputLines]).slice(-maxOutputLines);
+  runs[runIndex] = {
+    ...runs[runIndex],
+    ...patch,
+    output: nextOutput,
+  };
+  const latestRun = runs[runIndex];
+  stacks[index] = {
+    ...stacks[index],
+    runs,
+    lastAction: latestRun.action,
+    lastMessage: latestRun.message || stacks[index].lastMessage,
+    lastOutput: nextOutput,
+    updatedAt: new Date().toISOString(),
+    ...(patch.status ? { status: patch.status } : {}),
+  };
+  await writeMetadata(stacks);
+  return stacks[index];
+}
+
 async function commandExists(command) {
   return new Promise((resolve) => {
     const check = spawn(command, ['--version'], { stdio: 'ignore' });
@@ -267,6 +354,7 @@ export async function uploadTerraformStack({ name, description, buffer, user }) 
     workingDir: path.relative(targetDir, workingDir),
     terraformFiles,
     lastOutput: [],
+    runs: [],
   };
   stacks.push(stack);
   await writeMetadata(stacks);
@@ -317,18 +405,21 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
 
   const binary = await terraformBinary();
   const startedAt = new Date().toISOString();
-  await updateStack(stackId, {
-    status: 'running',
-    lastAction: action,
-    lastMessage: `${action} started.`,
-    lastRunAt: startedAt,
+  const run = await createStackRun(stackId, {
+    action,
+    user,
+    startedAt,
+    message: `${action} started.`,
   });
 
   const output = [];
   const runStep = async (label, args) => {
-    output.push(`$ ${binary} ${args.join(' ')}`);
+    const commandLine = `$ ${binary} ${args.join(' ')}`;
+    output.push(commandLine);
+    await updateStackRun(stackId, run.id, { message: `${label} running.` }, [commandLine]);
     const result = await runRequiredCommand(binary, args, workingDir);
     output.push(...result.output);
+    await updateStackRun(stackId, run.id, { message: `${label} completed.` }, result.output);
     return result;
   };
 
@@ -359,6 +450,11 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
       lastMessage: message,
       lastOutput: redactSecrets(output).slice(-maxOutputLines),
     });
+    const updatedWithRun = await updateStackRun(stackId, run.id, {
+      status: 'succeeded',
+      message,
+      finishedAt: new Date().toISOString(),
+    });
     const job = await createJob({
       provider: 'proxmox',
       status: 'succeeded',
@@ -368,7 +464,7 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
       resourceName: stack.name,
       user,
       message,
-      output: updated.lastOutput.map((text, index) => ({ line: index + 1, text })),
+      output: updatedWithRun.lastOutput.map((text, index) => ({ line: index + 1, text })),
       linkedResource: { provider: 'proxmox', type: 'terraformStack', id: stack.id, name: stack.name },
     });
     await appendAuditLog({
@@ -381,7 +477,7 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
       taskId: job.upid,
       message,
     });
-    return { stack: sanitizeStack(updated), job };
+    return { stack: sanitizeStack(updatedWithRun), job };
   } catch (error) {
     const commandOutput = error.commandResult?.output || [];
     output.push(...commandOutput);
@@ -391,6 +487,11 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
       lastMessage: error.message || message,
       lastOutput: redactSecrets(output).slice(-maxOutputLines),
     });
+    const updatedWithRun = await updateStackRun(stackId, run.id, {
+      status: 'failed',
+      message: error.message || message,
+      finishedAt: new Date().toISOString(),
+    }, commandOutput);
     const job = await createJob({
       provider: 'proxmox',
       status: 'failed',
@@ -400,7 +501,7 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
       resourceName: stack.name,
       user,
       message: error.message || message,
-      output: updated.lastOutput.map((text, index) => ({ line: index + 1, text })),
+      output: updatedWithRun.lastOutput.map((text, index) => ({ line: index + 1, text })),
       linkedResource: { provider: 'proxmox', type: 'terraformStack', id: stack.id, name: stack.name },
     });
     await appendAuditLog({
@@ -415,7 +516,7 @@ export async function runTerraformStackAction({ stackId, action, user, confirmat
     });
     const responseError = new Error(error.message || message);
     responseError.status = error.status || 500;
-    responseError.data = { stack: sanitizeStack(updated), job };
+    responseError.data = { stack: sanitizeStack(updatedWithRun), job };
     throw responseError;
   }
 }

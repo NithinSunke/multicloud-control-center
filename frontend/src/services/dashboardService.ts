@@ -91,6 +91,18 @@ export type TerraformStack = {
   workingDir: string;
   terraformFiles: string[];
   lastOutput: string[];
+  runs?: TerraformStackRun[];
+};
+
+export type TerraformStackRun = {
+  id: string;
+  action: string;
+  status: string;
+  message: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  user?: string;
+  output: string[];
 };
 
 export type TerraformStackActionResult = {
