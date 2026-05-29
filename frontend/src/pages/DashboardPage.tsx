@@ -10259,9 +10259,33 @@ export function DashboardPage() {
     }
   }
 
+  function getTerraformConfirmation(stack: TerraformStack, action: 'deploy' | 'destroy' | 'delete') {
+    const current = terraformConfirmation.trim();
+    if (action === 'deploy' && current === stack.name) {
+      return current;
+    }
+    if ((action === 'destroy' || action === 'delete') && (current === stack.name || current === stack.id)) {
+      return current;
+    }
+    const expected = action === 'deploy' ? stack.name : `${stack.name} or ${stack.id}`;
+    const typed = window.prompt(`Type ${expected} to confirm ${action}.`)?.trim() || '';
+    if (action === 'deploy' && typed === stack.name) {
+      setTerraformConfirmation(typed);
+      return typed;
+    }
+    if ((action === 'destroy' || action === 'delete') && (typed === stack.name || typed === stack.id)) {
+      setTerraformConfirmation(typed);
+      return typed;
+    }
+    setTerraformError(`Confirmation did not match. Type ${expected} to confirm ${action}.`);
+    return '';
+  }
+
   async function runTerraformStack(stack: TerraformStack, action: 'validate' | 'plan' | 'deploy' | 'destroy') {
-    if ((action === 'deploy' || action === 'destroy') && terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id) {
-      setTerraformError(`Type ${action === 'deploy' ? 'stack name' : 'stack name or ID'} to confirm ${action}.`);
+    const confirmation = action === 'deploy' || action === 'destroy'
+      ? getTerraformConfirmation(stack, action)
+      : '';
+    if ((action === 'deploy' || action === 'destroy') && !confirmation) {
       return;
     }
     setTerraformActionStackId(`${stack.id}:${action}`);
@@ -10273,8 +10297,8 @@ export function DashboardPage() {
         : action === 'plan'
           ? await dashboardService.planTerraformStack(stack.id)
           : action === 'deploy'
-            ? await dashboardService.deployTerraformStack(stack.id, terraformConfirmation.trim())
-            : await dashboardService.destroyTerraformStack(stack.id, terraformConfirmation.trim());
+            ? await dashboardService.deployTerraformStack(stack.id, confirmation)
+            : await dashboardService.destroyTerraformStack(stack.id, confirmation);
       setTerraformStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
       setTerraformConfirmation('');
       setTerraformMessage(response.data.message);
@@ -10288,15 +10312,15 @@ export function DashboardPage() {
   }
 
   async function removeTerraformStack(stack: TerraformStack) {
-    if (terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id) {
-      setTerraformError('Type stack name or stack ID to confirm delete.');
+    const confirmation = getTerraformConfirmation(stack, 'delete');
+    if (!confirmation) {
       return;
     }
     setTerraformActionStackId(`${stack.id}:delete`);
     setTerraformError('');
     setTerraformMessage('');
     try {
-      await dashboardService.deleteTerraformStack(stack.id, terraformConfirmation.trim());
+      await dashboardService.deleteTerraformStack(stack.id, confirmation);
       setTerraformStacks((current) => current.filter((item) => item.id !== stack.id));
       setTerraformConfirmation('');
       setTerraformMessage('Terraform stack deleted from MC3.');
@@ -24208,19 +24232,19 @@ export function DashboardPage() {
                                 {
                                   label: 'Deploy',
                                   tone: 'primary',
-                                  disabled: busy || terraformConfirmation.trim() !== stack.name,
+                                  disabled: busy,
                                   onClick: () => void runTerraformStack(stack, 'deploy'),
                                 },
                                 {
                                   label: 'Destroy',
                                   tone: 'danger',
-                                  disabled: busy || (terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id),
+                                  disabled: busy,
                                   onClick: () => void runTerraformStack(stack, 'destroy'),
                                 },
                                 {
                                   label: 'Delete from MC3',
                                   tone: 'danger',
-                                  disabled: busy || (terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id),
+                                  disabled: busy,
                                   onClick: () => void removeTerraformStack(stack),
                                 },
                               ]}
