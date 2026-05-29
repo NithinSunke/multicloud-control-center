@@ -45,12 +45,13 @@ import type {
   StorageContentItem,
   TaskDetailResponse,
   TemplateVolume,
+  TerraformStack,
 } from '../services/dashboardService';
 import type { ConnectorInput, ProxmoxConnector } from '../types/connectors';
 import type { DashboardData, ResourceRecord } from '../types/dashboard';
 
 type ActiveCloud = 'pve' | 'oci' | 'aws' | 'azure' | 'gcp' | null;
-type ActiveTab = 'dashboard' | 'operations' | 'backups' | 'storage' | 'network' | 'resourceDetail' | 'oci' | 'aws' | 'gcpInventory' | 'gcpComputeManagement' | 'gcpStorageManagement' | 'gcpNetworkManagement' | 'gcpDatabaseManagement' | 'gcpOptimization' | 'gcpResourceMap' | 'azureInventory' | 'azureVmManagement' | 'azureStorageManagement' | 'azureNetworkManagement' | 'azureDatabaseManagement' | 'azureOptimization' | 'azureResourceMap' | 'awsEc2Management' | 'awsStorageManagement' | 'awsNetworkManagement' | 'awsDatabaseManagement' | 'awsOptimization' | 'ociAllResources' | 'ociResourceMap' | 'ociOptimization' | 'ociVmManagement' | 'ociVolumeManagement' | 'ociFileSystemManagement' | 'ociObjectStorageManagement' | 'ociDatabaseManagement' | 'ociNetworkManagement' | 'ociDnsManagement' | 'ociResourceDetail' | 'logs' | 'notifications' | 'connectors';
+type ActiveTab = 'dashboard' | 'operations' | 'backups' | 'storage' | 'network' | 'terraformStacks' | 'resourceDetail' | 'oci' | 'aws' | 'gcpInventory' | 'gcpComputeManagement' | 'gcpStorageManagement' | 'gcpNetworkManagement' | 'gcpDatabaseManagement' | 'gcpOptimization' | 'gcpResourceMap' | 'azureInventory' | 'azureVmManagement' | 'azureStorageManagement' | 'azureNetworkManagement' | 'azureDatabaseManagement' | 'azureOptimization' | 'azureResourceMap' | 'awsEc2Management' | 'awsStorageManagement' | 'awsNetworkManagement' | 'awsDatabaseManagement' | 'awsOptimization' | 'ociAllResources' | 'ociResourceMap' | 'ociOptimization' | 'ociVmManagement' | 'ociVolumeManagement' | 'ociFileSystemManagement' | 'ociObjectStorageManagement' | 'ociDatabaseManagement' | 'ociNetworkManagement' | 'ociDnsManagement' | 'ociResourceDetail' | 'logs' | 'notifications' | 'connectors';
 type JobFilter = 'all' | 'running' | 'failed' | 'completed' | 'retryable' | 'cancelable';
 type JobProviderFilter = 'all' | 'proxmox' | 'oci' | 'aws' | 'azure' | 'gcp';
 type NavItem = {
@@ -2911,6 +2912,16 @@ export function DashboardPage() {
   const [networkForm, setNetworkForm] = useState<NetworkConfigInput>(emptyNetworkForm);
   const [networkMessage, setNetworkMessage] = useState('');
   const [networkError, setNetworkError] = useState('');
+  const [terraformStacks, setTerraformStacks] = useState<TerraformStack[]>([]);
+  const [terraformLoading, setTerraformLoading] = useState(false);
+  const [terraformUploading, setTerraformUploading] = useState(false);
+  const [terraformActionStackId, setTerraformActionStackId] = useState('');
+  const [terraformError, setTerraformError] = useState('');
+  const [terraformMessage, setTerraformMessage] = useState('');
+  const [terraformUploadName, setTerraformUploadName] = useState('');
+  const [terraformUploadDescription, setTerraformUploadDescription] = useState('');
+  const [terraformUploadFile, setTerraformUploadFile] = useState<File | null>(null);
+  const [terraformConfirmation, setTerraformConfirmation] = useState('');
   const [sdnZones, setSdnZones] = useState<SdnZone[]>([]);
   const [sdnVnets, setSdnVnets] = useState<SdnVnet[]>([]);
   const [sdnIpams, setSdnIpams] = useState<SdnIpam[]>([]);
@@ -10173,6 +10184,14 @@ export function DashboardPage() {
   }, [activeTab, selectedConnectorId, selectedConnector?.status, dashboard?.resources.nodes]);
 
   useEffect(() => {
+    if (activeTab !== 'terraformStacks') {
+      return;
+    }
+
+    void loadTerraformStacks();
+  }, [activeTab, selectedConnectorId]);
+
+  useEffect(() => {
     if (!createVmModalOpen) {
       return;
     }
@@ -10199,6 +10218,93 @@ export function DashboardPage() {
 
     return () => window.clearInterval(timer);
   }, [taskViewerTask?.upid, taskViewerTask?.status, taskViewerTask?.endedAt]);
+
+  async function loadTerraformStacks() {
+    setTerraformLoading(true);
+    setTerraformError('');
+    try {
+      const response = await dashboardService.getTerraformStacks();
+      setTerraformStacks(response.data.stacks);
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to load Terraform stacks.');
+    } finally {
+      setTerraformLoading(false);
+    }
+  }
+
+  async function uploadTerraformStack(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!terraformUploadFile) {
+      setTerraformError('Select a ZIP file containing your Terraform stack.');
+      return;
+    }
+    setTerraformUploading(true);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      const response = await dashboardService.uploadTerraformStack({
+        file: terraformUploadFile,
+        name: terraformUploadName || terraformUploadFile.name.replace(/\.zip$/i, ''),
+        description: terraformUploadDescription,
+      });
+      setTerraformStacks((current) => [response.data.stack, ...current.filter((stack) => stack.id !== response.data.stack.id)]);
+      setTerraformUploadName('');
+      setTerraformUploadDescription('');
+      setTerraformUploadFile(null);
+      setTerraformMessage(response.data.message);
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to upload Terraform stack.');
+    } finally {
+      setTerraformUploading(false);
+    }
+  }
+
+  async function runTerraformStack(stack: TerraformStack, action: 'validate' | 'deploy' | 'destroy') {
+    if ((action === 'deploy' || action === 'destroy') && terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id) {
+      setTerraformError(`Type ${action === 'deploy' ? 'stack name' : 'stack name or ID'} to confirm ${action}.`);
+      return;
+    }
+    setTerraformActionStackId(`${stack.id}:${action}`);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      const response = action === 'validate'
+        ? await dashboardService.validateTerraformStack(stack.id)
+        : action === 'deploy'
+          ? await dashboardService.deployTerraformStack(stack.id, terraformConfirmation.trim())
+          : await dashboardService.destroyTerraformStack(stack.id, terraformConfirmation.trim());
+      setTerraformStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
+      setTerraformConfirmation('');
+      setTerraformMessage(response.data.message);
+      void loadProxmoxLogs(false);
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : `Unable to ${action} Terraform stack.`);
+      void loadTerraformStacks();
+    } finally {
+      setTerraformActionStackId('');
+    }
+  }
+
+  async function removeTerraformStack(stack: TerraformStack) {
+    if (terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id) {
+      setTerraformError('Type stack name or stack ID to confirm delete.');
+      return;
+    }
+    setTerraformActionStackId(`${stack.id}:delete`);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      await dashboardService.deleteTerraformStack(stack.id, terraformConfirmation.trim());
+      setTerraformStacks((current) => current.filter((item) => item.id !== stack.id));
+      setTerraformConfirmation('');
+      setTerraformMessage('Terraform stack deleted from MC3.');
+      void refreshAuditLog();
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to delete Terraform stack.');
+    } finally {
+      setTerraformActionStackId('');
+    }
+  }
 
   function updateField<K extends keyof ConnectorInput>(key: K, value: ConnectorInput[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -12385,6 +12491,7 @@ export function DashboardPage() {
           items: [
             { id: 'storage', label: 'Storage', icon: 'ST' },
             { id: 'network', label: 'Network', icon: 'NW' },
+            { id: 'terraformStacks', label: 'Terraform stacks', icon: 'TF' },
           ],
         },
         {
@@ -23962,6 +24069,187 @@ export function DashboardPage() {
                 ))}
               </div>
             </section>
+          </>
+        ) : null}
+
+        {activeTab === 'terraformStacks' ? (
+          <>
+            <section className="pm-panel">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Terraform Stacks</p>
+                  <h2 className="text-lg font-semibold text-slate-950">Upload and deploy Proxmox stacks</h2>
+                  <p className="max-w-3xl text-sm text-slate-600">
+                    Upload a ZIP that contains your provider, variables, and Terraform files. MC3 extracts the stack, shows it here, and runs init/validate or deploy from the backend.
+                  </p>
+                </div>
+                <button className="pm-button" disabled={terraformLoading} onClick={() => void loadTerraformStacks()} type="button">
+                  {terraformLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+            </section>
+
+            <section className="pm-card p-5">
+              <form className="grid gap-4 lg:grid-cols-[1fr_1fr_1.5fr_auto]" onSubmit={uploadTerraformStack}>
+                <label className="text-sm font-medium text-slate-700">
+                  Stack Name
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformUploadName(event.target.value)}
+                    placeholder="ubuntu-web-stack"
+                    value={terraformUploadName}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Description
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformUploadDescription(event.target.value)}
+                    placeholder="Deploys one Proxmox VM"
+                    value={terraformUploadDescription}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  ZIP File
+                  <input
+                    accept=".zip,application/zip,application/x-zip-compressed"
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformUploadFile(event.target.files?.[0] || null)}
+                    type="file"
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button className="pm-button-primary w-full" disabled={terraformUploading || !terraformUploadFile} type="submit">
+                    {terraformUploading ? 'Uploading...' : 'Upload Stack'}
+                  </button>
+                </div>
+              </form>
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Do not put long-lived plaintext secrets in Terraform files. Prefer variable files scoped to this stack and rotate Proxmox tokens after testing.
+              </div>
+            </section>
+
+            {terraformMessage ? (
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                {terraformMessage}
+              </div>
+            ) : null}
+            {terraformError ? (
+              <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {terraformError}
+              </div>
+            ) : null}
+
+            <section className="pm-card">
+              <div className="border-b border-slate-200 p-4">
+                <label className="text-sm font-medium text-slate-700">
+                  Confirmation for deploy, destroy, or delete
+                  <input
+                    className="pm-input mt-1 max-w-xl"
+                    onChange={(event) => setTerraformConfirmation(event.target.value)}
+                    placeholder="Type stack name or stack ID"
+                    value={terraformConfirmation}
+                  />
+                </label>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="pm-table">
+                  <thead>
+                    <tr>
+                      {['Stack', 'Status', 'Working Dir', 'Files', 'Last Message', 'Updated', 'Actions'].map((heading) => (
+                        <th key={heading}>{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {terraformStacks.length ? terraformStacks.map((stack) => {
+                      const busy = terraformActionStackId.startsWith(`${stack.id}:`) || stack.status === 'running';
+                      return (
+                        <tr key={stack.id}>
+                          <td className="font-medium text-slate-900">
+                            {stack.name}
+                            <p className="text-xs text-slate-500">{stack.description || stack.id}</p>
+                          </td>
+                          <td>
+                            <span className={`pm-status ${
+                              stack.status === 'failed'
+                                ? 'bg-red-100 text-red-800'
+                                : stack.status === 'succeeded'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : stack.status === 'running'
+                                    ? 'bg-cyan-100 text-cyan-800'
+                                    : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {stack.status}
+                            </span>
+                          </td>
+                          <td className="text-xs text-slate-600">{stack.workingDir || '-'}</td>
+                          <td className="max-w-xs text-xs text-slate-600">
+                            {stack.terraformFiles?.length ? stack.terraformFiles.join(', ') : '-'}
+                          </td>
+                          <td className="max-w-md text-sm text-slate-700">{stack.lastMessage || '-'}</td>
+                          <td>{formatDate(stack.updatedAt)}</td>
+                          <td>
+                            <ActionMenu
+                              items={[
+                                {
+                                  label: busy ? 'Working...' : 'Validate / Init',
+                                  disabled: busy,
+                                  onClick: () => void runTerraformStack(stack, 'validate'),
+                                },
+                                {
+                                  label: 'Deploy',
+                                  tone: 'primary',
+                                  disabled: busy || terraformConfirmation.trim() !== stack.name,
+                                  onClick: () => void runTerraformStack(stack, 'deploy'),
+                                },
+                                {
+                                  label: 'Destroy',
+                                  tone: 'danger',
+                                  disabled: busy || (terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id),
+                                  onClick: () => void runTerraformStack(stack, 'destroy'),
+                                },
+                                {
+                                  label: 'Delete from MC3',
+                                  tone: 'danger',
+                                  disabled: busy || (terraformConfirmation.trim() !== stack.name && terraformConfirmation.trim() !== stack.id),
+                                  onClick: () => void removeTerraformStack(stack),
+                                },
+                              ]}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td className="px-3 py-6 text-sm text-slate-600" colSpan={7}>
+                          No Terraform stacks uploaded yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {terraformStacks.some((stack) => stack.lastOutput?.length) ? (
+              <section className="pm-panel">
+                <h3 className="text-base font-semibold text-slate-950">Latest Stack Logs</h3>
+                <div className="mt-3 grid gap-4 xl:grid-cols-2">
+                  {terraformStacks.filter((stack) => stack.lastOutput?.length).slice(0, 4).map((stack) => (
+                    <article className="rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs text-slate-100" key={`${stack.id}-logs`}>
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <strong className="text-sm text-white">{stack.name}</strong>
+                        <span className="text-slate-400">{stack.lastAction}</span>
+                      </div>
+                      <pre className="max-h-80 overflow-auto whitespace-pre-wrap font-mono leading-relaxed">
+                        {stack.lastOutput.slice(-120).join('\n')}
+                      </pre>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </>
         ) : null}
 

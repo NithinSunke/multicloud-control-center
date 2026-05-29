@@ -5,6 +5,57 @@ export function getDashboard() {
   return apiRequest<{ data: DashboardData }>('/proxmox/dashboard');
 }
 
+export function getTerraformStacks() {
+  return apiRequest<{ data: { stacks: TerraformStack[] } }>('/proxmox/terraform-stacks');
+}
+
+export async function uploadTerraformStack({ file, name, description }: { file: File; name: string; description: string }) {
+  const query = new URLSearchParams({ name, description });
+  const response = await fetch(`/api/proxmox/terraform-stacks/upload?${query.toString()}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Terraform stack upload failed.' }));
+    throw new Error(error.message || 'Terraform stack upload failed.');
+  }
+
+  return response.json() as Promise<{ data: { stack: TerraformStack; message: string } }>;
+}
+
+export function validateTerraformStack(stackId: string) {
+  return apiRequest<{ data: TerraformStackActionResult }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/validate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function deployTerraformStack(stackId: string, confirmation: string) {
+  return apiRequest<{ data: TerraformStackActionResult }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/deploy`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
+export function destroyTerraformStack(stackId: string, confirmation: string) {
+  return apiRequest<{ data: TerraformStackActionResult }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/destroy`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
+export function deleteTerraformStack(stackId: string, confirmation: string) {
+  return apiRequest<void>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
 export type ResourceAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'suspend';
 
 export type OperationResult = {
@@ -16,6 +67,28 @@ export type OperationResult = {
     exitstatus?: string;
   };
   resource: Record<string, unknown>;
+  message: string;
+};
+
+export type TerraformStack = {
+  id: string;
+  name: string;
+  description: string;
+  status: 'uploaded' | 'running' | 'succeeded' | 'failed' | string;
+  lastAction: string;
+  lastMessage: string;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  workingDir: string;
+  terraformFiles: string[];
+  lastOutput: string[];
+};
+
+export type TerraformStackActionResult = {
+  stack: TerraformStack;
+  job: ProxmoxTask;
   message: string;
 };
 

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { requireAuth } from '../controllers/auth.controller.js';
 import { validateBody, validateParams } from '../middleware/validateRequest.js';
 import {
@@ -85,6 +85,14 @@ import {
   updateNodeNetwork,
   applyNodeNetwork,
 } from '../controllers/proxmoxApi.controller.js';
+import {
+  deployTerraformStack,
+  destroyTerraformStack,
+  getTerraformStacks,
+  removeTerraformStack,
+  uploadTerraformStackArchive,
+  validateTerraformStack,
+} from '../controllers/terraformStacks.controller.js';
 
 const router = Router();
 
@@ -123,6 +131,16 @@ router.put('/backup-schedules/:id', validateParams(backupScheduleParamsSchema), 
 router.delete('/backup-schedules/:id', validateParams(backupScheduleParamsSchema), validateBody(confirmationBodySchema), deleteBackupSchedule);
 router.get('/logs/tasks', listTasks);
 router.get('/logs/cluster', listClusterLog);
+router.get('/terraform-stacks', getTerraformStacks);
+router.post(
+  '/terraform-stacks/upload',
+  express.raw({ type: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], limit: '50mb' }),
+  uploadTerraformStackArchive,
+);
+router.post('/terraform-stacks/:stackId/validate', validateTerraformStack);
+router.post('/terraform-stacks/:stackId/deploy', deployTerraformStack);
+router.post('/terraform-stacks/:stackId/destroy', destroyTerraformStack);
+router.delete('/terraform-stacks/:stackId', removeTerraformStack);
 router.get('/resources/:type/:node/:vmid/status', validateParams(resourceParamsSchema), getResourceStatus);
 router.get('/resources/:type/:node/:vmid/backups', validateParams(resourceParamsSchema), listResourceBackups);
 router.post('/resources/:type/:node/:vmid/actions/:action', validateParams(actionParamsSchema), runResourceAction);
