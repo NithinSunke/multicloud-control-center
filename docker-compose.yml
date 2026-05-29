@@ -1,0 +1,64 @@
+name: multi-cloud-manager
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-multi_cloud_manager}
+      POSTGRES_USER: ${POSTGRES_USER:-multi_cloud_manager}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-multi-cloud-manager-local}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      CORS_ORIGIN: http://localhost:8080
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-in-production}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+      JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-before-production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-local-dev-encryption-key-change-before-production}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DATA_DIR: /app/backend/data
+      DATABASE_URL: postgres://${POSTGRES_USER:-multi_cloud_manager}:${POSTGRES_PASSWORD:-multi-cloud-manager-local}@postgres:5432/${POSTGRES_DB:-multi_cloud_manager}
+      GCP_ALLOW_PAID_VM_CREATE: ${GCP_ALLOW_PAID_VM_CREATE:-true}
+    ports:
+      - "4000:4000"
+    volumes:
+      - backend-data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-prod
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+
+volumes:
+  backend-data:
+  postgres-data:

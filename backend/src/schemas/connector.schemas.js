@@ -1,0 +1,40 @@
+import { z } from 'zod';
+
+export const connectorSchema = z.object({
+  provider: z.enum(['proxmox', 'oci', 'aws', 'azure', 'gcp']).optional().default('proxmox'),
+  name: z.string().trim().min(1, 'Connector name is required.').max(100, 'Connector name is too long.'),
+  host: z.string().trim().max(255, 'Connector host is too long.').optional().default(''),
+  port: z.coerce.number().int('Port must be a whole number.').min(1, 'Port must be at least 1.').max(65535, 'Port must be at most 65535.').optional().default(8006),
+  realm: z.string().trim().max(64, 'Realm is too long.').optional().default('pam'),
+  username: z.string().trim().max(128, 'Username is too long.').optional().default(''),
+  authType: z.enum(['password', 'apiToken']).optional().default('apiToken'),
+  password: z.string().max(512, 'Password is too long.').optional().default(''),
+  apiTokenId: z.string().trim().max(255, 'API token ID is too long.').optional().default(''),
+  apiTokenSecret: z.string().max(512, 'API token secret is too long.').optional().default(''),
+  tenancyOcid: z.string().trim().max(255, 'Tenancy OCID is too long.').optional().default(''),
+  userOcid: z.string().trim().max(255, 'User OCID is too long.').optional().default(''),
+  compartmentOcid: z.string().trim().max(255, 'Compartment OCID is too long.').optional().default(''),
+  awsAccountId: z.string().trim().max(32, 'AWS account ID is too long.').optional().default(''),
+  awsAccessKeyId: z.string().trim().max(128, 'AWS access key ID is too long.').optional().default(''),
+  awsSecretAccessKey: z.string().max(512, 'AWS secret access key is too long.').optional().default(''),
+  awsSessionToken: z.string().max(4096, 'AWS session token is too long.').optional().default(''),
+  azureTenantId: z.string().trim().max(128, 'Azure tenant ID is too long.').optional().default(''),
+  azureSubscriptionId: z.string().trim().max(128, 'Azure subscription ID is too long.').optional().default(''),
+  azureClientId: z.string().trim().max(128, 'Azure client ID is too long.').optional().default(''),
+  azureClientSecret: z.string().max(2048, 'Azure client secret is too long.').optional().default(''),
+  azureCloud: z.enum(['public', 'gov', 'china']).optional().default('public'),
+  gcpProjectId: z.string().trim().max(128, 'GCP project ID is too long.').optional().default(''),
+  gcpClientEmail: z.string().trim().max(255, 'GCP service account email is too long.').optional().default(''),
+  gcpOrganizationId: z.string().trim().max(64, 'GCP organization ID is too long.').optional().default(''),
+  gcpBillingAccountId: z.string().trim().max(128, 'GCP billing account ID is too long.').optional().default(''),
+  region: z.string().trim().max(64, 'Region is too long.').optional().default(''),
+  fingerprint: z.string().trim().max(128, 'Fingerprint is too long.').optional().default(''),
+  privateKey: z.string().max(10000, 'Private key is too long.').optional().default(''),
+  privateKeyPassphrase: z.string().max(512, 'Private key passphrase is too long.').optional().default(''),
+  tlsVerify: z.boolean().optional().default(true),
+  notes: z.string().max(2000, 'Notes are too long.').optional().default(''),
+});
+
+export const connectorDeleteSchema = z.object({
+  confirmation: z.string().trim().min(1, 'Connector confirmation is required.').max(128, 'Connector confirmation is too long.'),
+});
