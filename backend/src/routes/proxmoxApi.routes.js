@@ -86,10 +86,24 @@ import {
   applyNodeNetwork,
 } from '../controllers/proxmoxApi.controller.js';
 import {
+  getAnsibleStacks,
+  getAnsibleSshIdentity,
+  importAnsibleStackGit,
+  pullAnsibleStackGit,
+  removeAnsibleStack,
+  runAnsibleStackPlaybook,
+  uploadAnsibleStackArchive,
+  validateAnsibleStackSyntax,
+} from '../controllers/ansibleStacks.controller.js';
+import {
   deployTerraformStack,
   destroyTerraformStack,
+  downloadTerraformStackArchive,
   getTerraformStacks,
+  importTerraformStackGit,
   planTerraformStack,
+  pullTerraformStackGit,
+  reuploadTerraformStackArchive,
   removeTerraformStack,
   uploadTerraformStackArchive,
   validateTerraformStack,
@@ -133,11 +147,31 @@ router.delete('/backup-schedules/:id', validateParams(backupScheduleParamsSchema
 router.get('/logs/tasks', listTasks);
 router.get('/logs/cluster', listClusterLog);
 router.get('/terraform-stacks', getTerraformStacks);
+router.get('/ansible-stacks', getAnsibleStacks);
+router.get('/ansible-stacks/ssh-key', getAnsibleSshIdentity);
+router.post(
+  '/ansible-stacks/upload',
+  express.raw({ type: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], limit: '50mb' }),
+  uploadAnsibleStackArchive,
+);
+router.post('/ansible-stacks/git', importAnsibleStackGit);
+router.post('/ansible-stacks/:stackId/pull', pullAnsibleStackGit);
+router.post('/ansible-stacks/:stackId/validate', validateAnsibleStackSyntax);
+router.post('/ansible-stacks/:stackId/run', runAnsibleStackPlaybook);
+router.delete('/ansible-stacks/:stackId', removeAnsibleStack);
+router.get('/terraform-stacks/:stackId/download', downloadTerraformStackArchive);
 router.post(
   '/terraform-stacks/upload',
   express.raw({ type: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], limit: '50mb' }),
   uploadTerraformStackArchive,
 );
+router.post('/terraform-stacks/git', importTerraformStackGit);
+router.put(
+  '/terraform-stacks/:stackId/upload',
+  express.raw({ type: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], limit: '50mb' }),
+  reuploadTerraformStackArchive,
+);
+router.post('/terraform-stacks/:stackId/pull', pullTerraformStackGit);
 router.post('/terraform-stacks/:stackId/validate', validateTerraformStack);
 router.post('/terraform-stacks/:stackId/plan', planTerraformStack);
 router.post('/terraform-stacks/:stackId/deploy', deployTerraformStack);

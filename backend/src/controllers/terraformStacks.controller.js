@@ -1,6 +1,10 @@
 import {
   deleteTerraformStack,
+  downloadTerraformStack,
+  importTerraformStackFromGit,
   listTerraformStacks,
+  pullTerraformStackFromGit,
+  replaceTerraformStackArchive,
   runTerraformStackAction,
   uploadTerraformStack,
 } from '../services/terraformStacks.js';
@@ -27,6 +31,60 @@ export async function uploadTerraformStackArchive(req, res, next) {
       user: currentUser(req),
     });
     res.status(201).json({ data: { stack, message: 'Terraform stack uploaded.' } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function reuploadTerraformStackArchive(req, res, next) {
+  try {
+    const stack = await replaceTerraformStackArchive({
+      stackId: req.params.stackId,
+      buffer: req.body,
+      user: currentUser(req),
+    });
+    res.json({ data: { stack, message: 'Terraform stack ZIP replaced.' } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function importTerraformStackGit(req, res, next) {
+  try {
+    const stack = await importTerraformStackFromGit({
+      name: req.body?.name,
+      description: req.body?.description,
+      repoUrl: req.body?.repoUrl,
+      branch: req.body?.branch,
+      gitPath: req.body?.path,
+      githubConnectorId: req.body?.githubConnectorId,
+      user: currentUser(req),
+    });
+    res.status(201).json({ data: { stack, message: 'Terraform stack imported from Git.' } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function pullTerraformStackGit(req, res, next) {
+  try {
+    const stack = await pullTerraformStackFromGit({
+      stackId: req.params.stackId,
+      user: currentUser(req),
+    });
+    res.json({ data: { stack, message: 'Pulled latest Terraform stack from Git.' } });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function downloadTerraformStackArchive(req, res, next) {
+  try {
+    const archive = await downloadTerraformStack({ stackId: req.params.stackId });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${archive.fileName}"`);
+    res.setHeader('Content-Length', String(archive.buffer.length));
+    res.send(archive.buffer);
   } catch (error) {
     next(error);
   }

@@ -11,6 +11,7 @@ import { appendAuditLog } from '../services/auditLog.js';
 import { verifyAwsConnector } from '../services/awsVerifier.js';
 import { verifyAzureConnector } from '../services/azureVerifier.js';
 import { verifyGcpConnector } from '../services/gcpVerifier.js';
+import { verifyGithubConnector } from '../services/githubVerifier.js';
 import { verifyOciConnector } from '../services/ociVerifier.js';
 import { verifyProxmoxConnector } from '../services/proxmoxVerifier.js';
 import { logger } from '../utils/logger.js';
@@ -118,7 +119,9 @@ export async function verifyConnector(req, res) {
           ? await verifyAzureConnector(connector)
           : connector.provider === 'gcp'
             ? await verifyGcpConnector(connector)
-            : await verifyProxmoxConnector(connector);
+            : connector.provider === 'github'
+              ? await verifyGithubConnector(connector)
+              : await verifyProxmoxConnector(connector);
     const publicConnector = await updateConnectorVerification(req.params.id, result);
     await appendAuditLog({
       action: 'connector-verify',

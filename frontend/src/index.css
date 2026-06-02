@@ -816,6 +816,18 @@ body {
     @apply transition odd:bg-white even:bg-slate-50/50 hover:bg-cyan-50/70;
   }
 
+  .terraform-log-detail-row {
+    @apply bg-white hover:bg-white;
+  }
+
+  .terraform-log-detail {
+    @apply rounded-lg border border-slate-200 bg-slate-50 p-3;
+  }
+
+  .terraform-log-output {
+    @apply max-h-[520px] overflow-auto whitespace-pre-wrap rounded-md border border-slate-900 bg-slate-950 p-4 font-mono text-xs leading-6 text-slate-100;
+  }
+
   .auto-table-pager {
     @apply flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600;
   }

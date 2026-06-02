@@ -8,6 +8,7 @@ export function listConnectors() {
     selectedAwsConnectorId?: string | null;
     selectedAzureConnectorId?: string | null;
     selectedGcpConnectorId?: string | null;
+    selectedGithubConnectorId?: string | null;
     connectors: ProxmoxConnector[];
   }>('/connectors');
 }

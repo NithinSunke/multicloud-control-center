@@ -9,6 +9,14 @@ export function getTerraformStacks() {
   return apiRequest<{ data: { stacks: TerraformStack[] } }>('/proxmox/terraform-stacks');
 }
 
+export function getAnsibleStacks() {
+  return apiRequest<{ data: { stacks: AnsibleStack[] } }>('/proxmox/ansible-stacks');
+}
+
+export function getAnsibleSshIdentity() {
+  return apiRequest<{ data: { identity: AnsibleSshIdentity } }>('/proxmox/ansible-stacks/ssh-key');
+}
+
 export async function uploadTerraformStack({ file, name, description }: { file: File; name: string; description: string }) {
   const query = new URLSearchParams({ name, description });
   const response = await fetch(`/api/proxmox/terraform-stacks/upload?${query.toString()}`, {
@@ -28,8 +36,115 @@ export async function uploadTerraformStack({ file, name, description }: { file: 
   return response.json() as Promise<{ data: { stack: TerraformStack; message: string } }>;
 }
 
+export async function uploadAnsibleStack({
+  file,
+  name,
+  description,
+  inventoryPath,
+  playbookPath,
+}: {
+  file: File;
+  name: string;
+  description: string;
+  inventoryPath: string;
+  playbookPath: string;
+}) {
+  const query = new URLSearchParams({ name, description, inventoryPath, playbookPath });
+  const response = await fetch(`/api/proxmox/ansible-stacks/upload?${query.toString()}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Ansible stack upload failed.' }));
+    throw new Error(error.message || 'Ansible stack upload failed.');
+  }
+
+  return response.json() as Promise<{ data: { stack: AnsibleStack; message: string } }>;
+}
+
+export async function reuploadTerraformStack({ stackId, file }: { stackId: string; file: File }) {
+  const response = await fetch(`/api/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/upload`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Terraform stack re-upload failed.' }));
+    throw new Error(error.message || 'Terraform stack re-upload failed.');
+  }
+
+  return response.json() as Promise<{ data: { stack: TerraformStack; message: string } }>;
+}
+
+export function importTerraformStackFromGit(input: {
+  name: string;
+  description: string;
+  repoUrl: string;
+  branch: string;
+  path: string;
+  githubConnectorId?: string;
+}) {
+  return apiRequest<{ data: { stack: TerraformStack; message: string } }>('/proxmox/terraform-stacks/git', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function importAnsibleStackFromGit(input: {
+  name: string;
+  description: string;
+  repoUrl: string;
+  branch: string;
+  path: string;
+  inventoryPath: string;
+  playbookPath: string;
+  githubConnectorId?: string;
+}) {
+  return apiRequest<{ data: { stack: AnsibleStack; message: string } }>('/proxmox/ansible-stacks/git', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function pullTerraformStackFromGit(stackId: string) {
+  return apiRequest<{ data: { stack: TerraformStack; message: string } }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/pull`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function pullAnsibleStackFromGit(stackId: string) {
+  return apiRequest<{ data: { stack: AnsibleStack; message: string } }>(`/proxmox/ansible-stacks/${encodeURIComponent(stackId)}/pull`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export function validateTerraformStack(stackId: string) {
   return apiRequest<{ data: TerraformStackActionResult }>(`/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/validate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function validateAnsibleStack(stackId: string) {
+  return apiRequest<{ data: AnsibleStackActionResult }>(`/proxmox/ansible-stacks/${encodeURIComponent(stackId)}/validate`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function runAnsibleStack(stackId: string) {
+  return apiRequest<{ data: AnsibleStackActionResult }>(`/proxmox/ansible-stacks/${encodeURIComponent(stackId)}/run`, {
     method: 'POST',
     body: JSON.stringify({}),
   });
@@ -63,6 +178,31 @@ export function deleteTerraformStack(stackId: string, confirmation: string) {
   });
 }
 
+export function deleteAnsibleStack(stackId: string, confirmation: string) {
+  return apiRequest<void>(`/proxmox/ansible-stacks/${encodeURIComponent(stackId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
+export async function downloadTerraformStack(stackId: string) {
+  const response = await fetch(`/api/proxmox/terraform-stacks/${encodeURIComponent(stackId)}/download`, {
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ message: 'Terraform stack download failed.' }));
+    throw new Error(error.message || 'Terraform stack download failed.');
+  }
+
+  const disposition = response.headers.get('content-disposition') || '';
+  const fileNameMatch = disposition.match(/filename="([^"]+)"/i);
+  return {
+    blob: await response.blob(),
+    fileName: fileNameMatch?.[1] || `terraform-stack-${stackId}.zip`,
+  };
+}
+
 export type ResourceAction = 'start' | 'shutdown' | 'stop' | 'reboot' | 'suspend';
 
 export type OperationResult = {
@@ -81,6 +221,14 @@ export type TerraformStack = {
   id: string;
   name: string;
   description: string;
+  sourceType?: 'upload' | 'git' | string;
+  git?: {
+    repoUrl: string;
+    branch: string;
+    path: string;
+    githubConnectorId?: string;
+    githubConnectorName?: string;
+  };
   status: 'uploaded' | 'running' | 'succeeded' | 'failed' | string;
   lastAction: string;
   lastMessage: string;
@@ -92,6 +240,42 @@ export type TerraformStack = {
   terraformFiles: string[];
   lastOutput: string[];
   runs?: TerraformStackRun[];
+};
+
+export type AnsibleStack = {
+  id: string;
+  name: string;
+  description: string;
+  sourceType?: 'upload' | 'git' | string;
+  git?: {
+    repoUrl: string;
+    branch: string;
+    path: string;
+    githubConnectorId?: string;
+    githubConnectorName?: string;
+  };
+  status: 'uploaded' | 'running' | 'succeeded' | 'failed' | string;
+  lastAction: string;
+  lastMessage: string;
+  lastRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  workingDir: string;
+  playbooks: string[];
+  inventories: string[];
+  inventoryPath: string;
+  playbookPath: string;
+  lastOutput: string[];
+  runs?: TerraformStackRun[];
+};
+
+export type AnsibleSshIdentity = {
+  keyType: string;
+  publicKey: string;
+  fingerprint: string;
+  privateKeyPath: string;
+  publicKeyPath: string;
 };
 
 export type TerraformStackRun = {
@@ -107,6 +291,12 @@ export type TerraformStackRun = {
 
 export type TerraformStackActionResult = {
   stack: TerraformStack;
+  job: ProxmoxTask;
+  message: string;
+};
+
+export type AnsibleStackActionResult = {
+  stack: AnsibleStack;
   job: ProxmoxTask;
   message: string;
 };

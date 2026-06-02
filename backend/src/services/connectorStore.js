@@ -84,6 +84,8 @@ function normalizePayload(payload) {
         ? 'azure'
         : payload.provider === 'gcp'
           ? 'gcp'
+          : payload.provider === 'github'
+            ? 'github'
           : 'proxmox';
   const authType = payload.authType === 'password' ? 'password' : 'apiToken';
   const azureCloud = ['public', 'gov', 'china'].includes(payload.azureCloud) ? payload.azureCloud : 'public';
@@ -115,6 +117,8 @@ function normalizePayload(payload) {
     gcpClientEmail: String(payload.gcpClientEmail || '').trim(),
     gcpOrganizationId: String(payload.gcpOrganizationId || '').trim(),
     gcpBillingAccountId: String(payload.gcpBillingAccountId || '').trim(),
+    githubUsername: String(payload.githubUsername || payload.username || '').trim(),
+    githubToken: String(payload.githubToken || payload.apiTokenSecret || ''),
     region: String(payload.region || '').trim(),
     fingerprint: String(payload.fingerprint || '').trim(),
     privateKey: String(payload.privateKey || ''),
@@ -148,6 +152,9 @@ function validateConnector(payload, existingConnector) {
     if (!payload.gcpProjectId) missing.push('GCP project ID');
     if (!payload.gcpClientEmail) missing.push('GCP service account email');
     if (!existingConnector && !payload.privateKey) missing.push('GCP private key');
+  } else if (payload.provider === 'github') {
+    if (!payload.githubUsername) missing.push('GitHub username');
+    if (!existingConnector && !payload.githubToken) missing.push('GitHub token');
   } else {
     if (!payload.host) missing.push('host');
     if (!payload.username) missing.push('username');
@@ -179,6 +186,8 @@ function connectorProvider(connector) {
         ? 'azure'
         : connector.provider === 'gcp'
           ? 'gcp'
+          : connector.provider === 'github'
+            ? 'github'
           : 'proxmox';
 }
 
@@ -217,6 +226,7 @@ function publicConnector(connector, selectedConnectorId) {
     gcpClientEmail: connector.gcpClientEmail || '',
     gcpOrganizationId: connector.gcpOrganizationId || '',
     gcpBillingAccountId: connector.gcpBillingAccountId || '',
+    githubUsername: connector.githubUsername || '',
     region: connector.region || '',
     fingerprint: connector.fingerprint || '',
     tlsVerify: connector.tlsVerify,
@@ -235,6 +245,8 @@ function publicConnector(connector, selectedConnectorId) {
           ? maskSecret(connector.azureClientId || '')
           : provider === 'gcp'
             ? maskSecret(connector.gcpClientEmail || '')
+            : provider === 'github'
+              ? maskSecret(connector.githubUsername || '')
             : connector.authType === 'password' ? maskSecret(password) : maskSecret(apiTokenSecret),
     secretStored: provider === 'oci'
       ? Boolean(connector.encryptedPrivateKey)
@@ -242,9 +254,11 @@ function publicConnector(connector, selectedConnectorId) {
         ? Boolean(connector.encryptedAwsSecretAccessKey)
         : provider === 'azure'
           ? Boolean(connector.encryptedAzureClientSecret)
-          : provider === 'gcp'
-            ? Boolean(connector.encryptedGcpPrivateKey)
-            : Boolean(password || apiTokenSecret),
+        : provider === 'gcp'
+          ? Boolean(connector.encryptedGcpPrivateKey)
+          : provider === 'github'
+            ? Boolean(connector.encryptedGithubToken)
+          : Boolean(password || apiTokenSecret),
   };
 }
 
@@ -275,6 +289,9 @@ function connectorWithSecrets(connector) {
     azureClientSecret: provider === 'azure' && connector.encryptedAzureClientSecret
       ? decrypt(connector.encryptedAzureClientSecret)
       : '',
+    githubToken: provider === 'github' && connector.encryptedGithubToken
+      ? decrypt(connector.encryptedGithubToken)
+      : '',
   };
 }
 
@@ -286,6 +303,7 @@ export async function listConnectors() {
     selectedAwsConnectorId: store.selectedAwsConnectorId || null,
     selectedAzureConnectorId: store.selectedAzureConnectorId || null,
     selectedGcpConnectorId: store.selectedGcpConnectorId || null,
+    selectedGithubConnectorId: store.selectedGithubConnectorId || null,
     connectors: store.connectors.map((connector) =>
       publicConnector(
         connector,
@@ -297,6 +315,8 @@ export async function listConnectors() {
               ? store.selectedAzureConnectorId
               : connectorProvider(connector) === 'gcp'
                 ? store.selectedGcpConnectorId
+                : connectorProvider(connector) === 'github'
+                  ? store.selectedGithubConnectorId
                 : store.selectedConnectorId,
       ),
     ),
@@ -342,6 +362,8 @@ export async function createConnector(rawPayload) {
     gcpOrganizationId: payload.provider === 'gcp' ? payload.gcpOrganizationId : '',
     gcpBillingAccountId: payload.provider === 'gcp' ? payload.gcpBillingAccountId : '',
     encryptedGcpPrivateKey: payload.provider === 'gcp' ? encrypt(payload.privateKey) : null,
+    githubUsername: payload.provider === 'github' ? payload.githubUsername : '',
+    encryptedGithubToken: payload.provider === 'github' ? encrypt(payload.githubToken) : null,
     region: payload.provider === 'oci' || payload.provider === 'aws' ? payload.region : '',
     fingerprint: payload.provider === 'oci' ? payload.fingerprint : '',
     encryptedPrivateKey: payload.provider === 'oci' ? encrypt(payload.privateKey) : null,
@@ -370,6 +392,9 @@ export async function createConnector(rawPayload) {
   if (payload.provider === 'gcp' && !store.selectedGcpConnectorId) {
     store.selectedGcpConnectorId = connector.id;
   }
+  if (payload.provider === 'github' && !store.selectedGithubConnectorId) {
+    store.selectedGithubConnectorId = connector.id;
+  }
   if (payload.provider === 'proxmox' && !store.selectedConnectorId) {
     store.selectedConnectorId = connector.id;
   }
@@ -384,6 +409,8 @@ export async function createConnector(rawPayload) {
           ? store.selectedAzureConnectorId
           : payload.provider === 'gcp'
             ? store.selectedGcpConnectorId
+            : payload.provider === 'github'
+              ? store.selectedGithubConnectorId
           : store.selectedConnectorId,
   );
 }
@@ -465,6 +492,13 @@ export async function updateConnector(id, rawPayload) {
           ? encrypt(payload.privateKey)
           : existingProvider === 'gcp' ? existing.encryptedGcpPrivateKey : null
         : null,
+    githubUsername: payload.provider === 'github' ? payload.githubUsername : '',
+    encryptedGithubToken:
+      payload.provider === 'github'
+        ? payload.githubToken
+          ? encrypt(payload.githubToken)
+          : existingProvider === 'github' ? existing.encryptedGithubToken : null
+        : null,
     region: payload.provider === 'oci' || payload.provider === 'aws' ? payload.region : '',
     fingerprint: payload.provider === 'oci' ? payload.fingerprint : '',
     encryptedPrivateKey:
@@ -504,6 +538,9 @@ export async function updateConnector(id, rawPayload) {
     if (existingProvider === 'gcp' && store.selectedGcpConnectorId === id) {
       store.selectedGcpConnectorId = store.connectors.find((connector) => connector.id !== id && connectorProvider(connector) === 'gcp')?.id || null;
     }
+    if (existingProvider === 'github' && store.selectedGithubConnectorId === id) {
+      store.selectedGithubConnectorId = store.connectors.find((connector) => connector.id !== id && connectorProvider(connector) === 'github')?.id || null;
+    }
   }
   if (payload.provider === 'proxmox' && !store.selectedConnectorId) {
     store.selectedConnectorId = id;
@@ -520,6 +557,9 @@ export async function updateConnector(id, rawPayload) {
   if (payload.provider === 'gcp' && !store.selectedGcpConnectorId) {
     store.selectedGcpConnectorId = id;
   }
+  if (payload.provider === 'github' && !store.selectedGithubConnectorId) {
+    store.selectedGithubConnectorId = id;
+  }
   await writeStore(store);
   return publicConnector(
     updated,
@@ -531,6 +571,8 @@ export async function updateConnector(id, rawPayload) {
           ? store.selectedAzureConnectorId
           : payload.provider === 'gcp'
             ? store.selectedGcpConnectorId
+            : payload.provider === 'github'
+              ? store.selectedGithubConnectorId
           : store.selectedConnectorId,
   );
 }
@@ -565,8 +607,12 @@ export async function deleteConnector(id) {
     store.selectedGcpConnectorId === id
       ? nextConnectors.find((connector) => connectorProvider(connector) === 'gcp')?.id || null
       : store.selectedGcpConnectorId || null;
+  const selectedGithubConnectorId =
+    store.selectedGithubConnectorId === id
+      ? nextConnectors.find((connector) => connectorProvider(connector) === 'github')?.id || null
+      : store.selectedGithubConnectorId || null;
 
-  await writeStore({ connectors: nextConnectors, selectedConnectorId, selectedOciConnectorId, selectedAwsConnectorId, selectedAzureConnectorId, selectedGcpConnectorId });
+  await writeStore({ connectors: nextConnectors, selectedConnectorId, selectedOciConnectorId, selectedAwsConnectorId, selectedAzureConnectorId, selectedGcpConnectorId, selectedGithubConnectorId });
 }
 
 export async function selectConnector(id) {
@@ -588,6 +634,8 @@ export async function selectConnector(id) {
     store.selectedAzureConnectorId = id;
   } else if (provider === 'gcp') {
     store.selectedGcpConnectorId = id;
+  } else if (provider === 'github') {
+    store.selectedGithubConnectorId = id;
   } else {
     store.selectedConnectorId = id;
   }
@@ -642,6 +690,16 @@ export async function getConnectorForUse(id) {
   }
 
   return connectorWithSecrets(connector);
+}
+
+export async function getGithubConnectorForUse(id) {
+  const connector = await getConnectorForUse(id);
+  if (connectorProvider(connector) !== 'github') {
+    const error = new Error('Selected connector is not a GitHub connector.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return connector;
 }
 
 export async function getSelectedConnectorForUse() {
@@ -726,6 +784,10 @@ export async function updateConnectorVerification(id, result) {
       connectorProvider(store.connectors[index]) === 'gcp' && result.projectNumber
         ? String(result.projectNumber)
         : store.connectors[index].gcpProjectNumber,
+    githubUsername:
+      connectorProvider(store.connectors[index]) === 'github' && result.githubUsername
+        ? result.githubUsername
+        : store.connectors[index].githubUsername,
     status: result.ok ? 'verified' : 'error',
     lastVerifiedAt: new Date().toISOString(),
     verificationMessage: result.message,
@@ -743,7 +805,9 @@ export async function updateConnectorVerification(id, result) {
         : connectorProvider(updated) === 'azure'
           ? store.selectedAzureConnectorId
           : connectorProvider(updated) === 'gcp'
-            ? store.selectedGcpConnectorId
+          ? store.selectedGcpConnectorId
+          : connectorProvider(updated) === 'github'
+            ? store.selectedGithubConnectorId
           : store.selectedConnectorId,
   );
 }

@@ -1,5 +1,5 @@
 export type ConnectorAuthType = 'apiToken' | 'password';
-export type ConnectorProvider = 'proxmox' | 'oci' | 'aws' | 'azure' | 'gcp';
+export type ConnectorProvider = 'proxmox' | 'oci' | 'aws' | 'azure' | 'gcp' | 'github';
 
 export type ProxmoxConnector = {
   id: string;
@@ -28,6 +28,7 @@ export type ProxmoxConnector = {
   gcpClientEmail?: string;
   gcpOrganizationId?: string;
   gcpBillingAccountId?: string;
+  githubUsername?: string;
   region?: string;
   fingerprint?: string;
   tlsVerify: boolean;
@@ -70,6 +71,8 @@ export type ConnectorInput = {
   gcpClientEmail?: string;
   gcpOrganizationId?: string;
   gcpBillingAccountId?: string;
+  githubUsername?: string;
+  githubToken?: string;
   region?: string;
   fingerprint?: string;
   privateKey?: string;

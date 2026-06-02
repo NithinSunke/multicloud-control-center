@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Bar, BarChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ActionMenu } from '../components/ActionMenu';
 import { ConsoleModal } from '../components/ConsoleModal';
@@ -20,6 +20,8 @@ import type { GcpInventory } from '../services/gcpService';
 import type { OciAllResourcesResponse, OciAllResourcesScanJob, OciCompartment, OciCustomImage, OciInventory, OciLaunchOptions, OciResourceMapNode, OciResourceMapResponse, OciScopedResourcesResponse } from '../services/ociService';
 import type {
   AuditLogEntry,
+  AnsibleStack,
+  AnsibleSshIdentity,
   AppNotification,
   BackupSchedule,
   BackupVolume,
@@ -46,12 +48,13 @@ import type {
   TaskDetailResponse,
   TemplateVolume,
   TerraformStack,
+  TerraformStackRun,
 } from '../services/dashboardService';
 import type { ConnectorInput, ProxmoxConnector } from '../types/connectors';
 import type { DashboardData, ResourceRecord } from '../types/dashboard';
 
 type ActiveCloud = 'pve' | 'oci' | 'aws' | 'azure' | 'gcp' | null;
-type ActiveTab = 'dashboard' | 'operations' | 'backups' | 'storage' | 'network' | 'terraformStacks' | 'resourceDetail' | 'oci' | 'aws' | 'gcpInventory' | 'gcpComputeManagement' | 'gcpStorageManagement' | 'gcpNetworkManagement' | 'gcpDatabaseManagement' | 'gcpOptimization' | 'gcpResourceMap' | 'azureInventory' | 'azureVmManagement' | 'azureStorageManagement' | 'azureNetworkManagement' | 'azureDatabaseManagement' | 'azureOptimization' | 'azureResourceMap' | 'awsEc2Management' | 'awsStorageManagement' | 'awsNetworkManagement' | 'awsDatabaseManagement' | 'awsOptimization' | 'ociAllResources' | 'ociResourceMap' | 'ociOptimization' | 'ociVmManagement' | 'ociVolumeManagement' | 'ociFileSystemManagement' | 'ociObjectStorageManagement' | 'ociDatabaseManagement' | 'ociNetworkManagement' | 'ociDnsManagement' | 'ociResourceDetail' | 'logs' | 'notifications' | 'connectors';
+type ActiveTab = 'dashboard' | 'operations' | 'backups' | 'storage' | 'network' | 'terraformStacks' | 'ansibleStacks' | 'resourceDetail' | 'oci' | 'aws' | 'gcpInventory' | 'gcpComputeManagement' | 'gcpStorageManagement' | 'gcpNetworkManagement' | 'gcpDatabaseManagement' | 'gcpOptimization' | 'gcpResourceMap' | 'azureInventory' | 'azureVmManagement' | 'azureStorageManagement' | 'azureNetworkManagement' | 'azureDatabaseManagement' | 'azureOptimization' | 'azureResourceMap' | 'awsEc2Management' | 'awsStorageManagement' | 'awsNetworkManagement' | 'awsDatabaseManagement' | 'awsOptimization' | 'ociAllResources' | 'ociResourceMap' | 'ociOptimization' | 'ociVmManagement' | 'ociVolumeManagement' | 'ociFileSystemManagement' | 'ociObjectStorageManagement' | 'ociDatabaseManagement' | 'ociNetworkManagement' | 'ociDnsManagement' | 'ociResourceDetail' | 'logs' | 'notifications' | 'connectors';
 type JobFilter = 'all' | 'running' | 'failed' | 'completed' | 'retryable' | 'cancelable';
 type JobProviderFilter = 'all' | 'proxmox' | 'oci' | 'aws' | 'azure' | 'gcp';
 type NavItem = {
@@ -702,6 +705,8 @@ const emptyForm: ConnectorInput = {
   gcpClientEmail: '',
   gcpOrganizationId: '',
   gcpBillingAccountId: '',
+  githubUsername: '',
+  githubToken: '',
   region: '',
   fingerprint: '',
   privateKey: '',
@@ -1582,6 +1587,39 @@ function formatDate(value: string | null) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+function stripAnsiCodes(value: string) {
+  return value.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+}
+
+function terraformRunStatusClass(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === 'failed') {
+    return 'bg-red-100 text-red-800';
+  }
+  if (normalized === 'succeeded') {
+    return 'bg-emerald-100 text-emerald-800';
+  }
+  if (normalized === 'running') {
+    return 'bg-cyan-100 text-cyan-800';
+  }
+  return 'bg-slate-100 text-slate-700';
+}
+
+function formatDuration(startedAt: string | null, finishedAt: string | null) {
+  if (!startedAt) {
+    return '-';
+  }
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+    return '-';
+  }
+  const totalSeconds = Math.round((end - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function formatRelativeAge(value?: string | null) {
@@ -2913,15 +2951,48 @@ export function DashboardPage() {
   const [networkMessage, setNetworkMessage] = useState('');
   const [networkError, setNetworkError] = useState('');
   const [terraformStacks, setTerraformStacks] = useState<TerraformStack[]>([]);
+  const [ansibleStacks, setAnsibleStacks] = useState<AnsibleStack[]>([]);
+  const [ansibleSshIdentity, setAnsibleSshIdentity] = useState<AnsibleSshIdentity | null>(null);
   const [terraformLoading, setTerraformLoading] = useState(false);
+  const [ansibleLoading, setAnsibleLoading] = useState(false);
+  const [ansibleSshLoading, setAnsibleSshLoading] = useState(false);
   const [terraformUploading, setTerraformUploading] = useState(false);
+  const [ansibleUploading, setAnsibleUploading] = useState(false);
   const [terraformActionStackId, setTerraformActionStackId] = useState('');
+  const [ansibleActionStackId, setAnsibleActionStackId] = useState('');
   const [terraformError, setTerraformError] = useState('');
   const [terraformMessage, setTerraformMessage] = useState('');
+  const [ansibleError, setAnsibleError] = useState('');
+  const [ansibleMessage, setAnsibleMessage] = useState('');
   const [terraformUploadName, setTerraformUploadName] = useState('');
   const [terraformUploadDescription, setTerraformUploadDescription] = useState('');
   const [terraformUploadFile, setTerraformUploadFile] = useState<File | null>(null);
+  const [ansibleUploadName, setAnsibleUploadName] = useState('');
+  const [ansibleUploadDescription, setAnsibleUploadDescription] = useState('');
+  const [ansibleUploadInventoryPath, setAnsibleUploadInventoryPath] = useState('');
+  const [ansibleUploadPlaybookPath, setAnsibleUploadPlaybookPath] = useState('');
+  const [ansibleUploadFile, setAnsibleUploadFile] = useState<File | null>(null);
+  const [terraformGitName, setTerraformGitName] = useState('');
+  const [terraformGitDescription, setTerraformGitDescription] = useState('');
+  const [terraformGitRepoUrl, setTerraformGitRepoUrl] = useState('');
+  const [terraformGitBranch, setTerraformGitBranch] = useState('main');
+  const [terraformGitPath, setTerraformGitPath] = useState('');
+  const [terraformGitGithubConnectorId, setTerraformGitGithubConnectorId] = useState('');
+  const [ansibleGitName, setAnsibleGitName] = useState('');
+  const [ansibleGitDescription, setAnsibleGitDescription] = useState('');
+  const [ansibleGitRepoUrl, setAnsibleGitRepoUrl] = useState('');
+  const [ansibleGitBranch, setAnsibleGitBranch] = useState('main');
+  const [ansibleGitPath, setAnsibleGitPath] = useState('');
+  const [ansibleGitInventoryPath, setAnsibleGitInventoryPath] = useState('');
+  const [ansibleGitPlaybookPath, setAnsibleGitPlaybookPath] = useState('');
+  const [ansibleGitGithubConnectorId, setAnsibleGitGithubConnectorId] = useState('');
   const [terraformConfirmation, setTerraformConfirmation] = useState('');
+  const [ansibleConfirmation, setAnsibleConfirmation] = useState('');
+  const [ansibleSshCopied, setAnsibleSshCopied] = useState(false);
+  const terraformReuploadInputRef = useRef<HTMLInputElement | null>(null);
+  const terraformReuploadStackRef = useRef<TerraformStack | null>(null);
+  const [expandedTerraformLogId, setExpandedTerraformLogId] = useState('');
+  const [expandedAnsibleLogId, setExpandedAnsibleLogId] = useState('');
   const [sdnZones, setSdnZones] = useState<SdnZone[]>([]);
   const [sdnVnets, setSdnVnets] = useState<SdnVnet[]>([]);
   const [sdnIpams, setSdnIpams] = useState<SdnIpam[]>([]);
@@ -10192,6 +10263,15 @@ export function DashboardPage() {
   }, [activeTab, selectedConnectorId]);
 
   useEffect(() => {
+    if (activeTab !== 'ansibleStacks') {
+      return;
+    }
+
+    void loadAnsibleStacks();
+    void loadAnsibleSshIdentity();
+  }, [activeTab]);
+
+  useEffect(() => {
     if (activeTab !== 'terraformStacks' || !terraformStacks.some((stack) => stack.status === 'running')) {
       return undefined;
     }
@@ -10266,6 +10346,242 @@ export function DashboardPage() {
       setTerraformError(err instanceof Error ? err.message : 'Unable to upload Terraform stack.');
     } finally {
       setTerraformUploading(false);
+    }
+  }
+
+  async function loadAnsibleStacks() {
+    setAnsibleLoading(true);
+    setAnsibleError('');
+    try {
+      const response = await dashboardService.getAnsibleStacks();
+      setAnsibleStacks(response.data.stacks);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to load Ansible stacks.');
+    } finally {
+      setAnsibleLoading(false);
+    }
+  }
+
+  async function loadAnsibleSshIdentity() {
+    setAnsibleSshLoading(true);
+    setAnsibleError('');
+    try {
+      const response = await dashboardService.getAnsibleSshIdentity();
+      setAnsibleSshIdentity(response.data.identity);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to load Ansible SSH key.');
+    } finally {
+      setAnsibleSshLoading(false);
+    }
+  }
+
+  async function copyAnsiblePublicKey() {
+    if (!ansibleSshIdentity?.publicKey) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(ansibleSshIdentity.publicKey);
+      setAnsibleSshCopied(true);
+      window.setTimeout(() => setAnsibleSshCopied(false), 2500);
+    } catch {
+      setAnsibleError('Unable to copy the public key from this browser.');
+    }
+  }
+
+  async function uploadAnsibleStack(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ansibleUploadFile) {
+      setAnsibleError('Choose an Ansible ZIP file first.');
+      return;
+    }
+    setAnsibleUploading(true);
+    setAnsibleError('');
+    setAnsibleMessage('');
+    try {
+      const response = await dashboardService.uploadAnsibleStack({
+        file: ansibleUploadFile,
+        name: ansibleUploadName || ansibleUploadFile.name.replace(/\.zip$/i, ''),
+        description: ansibleUploadDescription,
+        inventoryPath: ansibleUploadInventoryPath,
+        playbookPath: ansibleUploadPlaybookPath,
+      });
+      setAnsibleStacks((current) => [response.data.stack, ...current.filter((stack) => stack.id !== response.data.stack.id)]);
+      setAnsibleUploadName('');
+      setAnsibleUploadDescription('');
+      setAnsibleUploadInventoryPath('');
+      setAnsibleUploadPlaybookPath('');
+      setAnsibleUploadFile(null);
+      setAnsibleMessage(response.data.message);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to upload Ansible stack.');
+    } finally {
+      setAnsibleUploading(false);
+    }
+  }
+
+  async function importAnsibleStackFromGit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAnsibleUploading(true);
+    setAnsibleError('');
+    setAnsibleMessage('');
+    try {
+      const response = await dashboardService.importAnsibleStackFromGit({
+        name: ansibleGitName,
+        description: ansibleGitDescription,
+        repoUrl: ansibleGitRepoUrl,
+        branch: ansibleGitBranch || 'main',
+        path: ansibleGitPath,
+        inventoryPath: ansibleGitInventoryPath,
+        playbookPath: ansibleGitPlaybookPath,
+        githubConnectorId: ansibleGitGithubConnectorId || undefined,
+      });
+      setAnsibleStacks((current) => [response.data.stack, ...current.filter((stack) => stack.id !== response.data.stack.id)]);
+      setAnsibleGitName('');
+      setAnsibleGitDescription('');
+      setAnsibleGitRepoUrl('');
+      setAnsibleGitBranch('main');
+      setAnsibleGitPath('');
+      setAnsibleGitInventoryPath('');
+      setAnsibleGitPlaybookPath('');
+      setAnsibleGitGithubConnectorId('');
+      setAnsibleMessage(response.data.message);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to import Ansible stack from Git.');
+    } finally {
+      setAnsibleUploading(false);
+    }
+  }
+
+  async function pullAnsibleStackFromGit(stack: AnsibleStack) {
+    setAnsibleActionStackId(`${stack.id}:pull`);
+    setAnsibleError('');
+    setAnsibleMessage('');
+    try {
+      const response = await dashboardService.pullAnsibleStackFromGit(stack.id);
+      setAnsibleStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
+      setAnsibleMessage(response.data.message);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to pull Ansible stack from Git.');
+    } finally {
+      setAnsibleActionStackId('');
+    }
+  }
+
+  async function validateAnsibleStack(stack: AnsibleStack) {
+    setAnsibleActionStackId(`${stack.id}:validate`);
+    setAnsibleError('');
+    setAnsibleMessage('');
+    try {
+      const response = await dashboardService.validateAnsibleStack(stack.id);
+      setAnsibleStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
+      setAnsibleMessage(response.data.message);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to validate Ansible stack.');
+      void loadAnsibleStacks();
+    } finally {
+      setAnsibleActionStackId('');
+    }
+  }
+
+  async function runAnsibleStack(stack: AnsibleStack) {
+    setAnsibleActionStackId(`${stack.id}:run`);
+    setAnsibleError('');
+    setAnsibleMessage('');
+    try {
+      const response = await dashboardService.runAnsibleStack(stack.id);
+      setAnsibleStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
+      setAnsibleMessage(response.data.message);
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to run Ansible playbook.');
+      void loadAnsibleStacks();
+    } finally {
+      setAnsibleActionStackId('');
+    }
+  }
+
+  async function removeAnsibleStack(stack: AnsibleStack) {
+    const confirmation = ansibleConfirmation.trim();
+    if (confirmation !== stack.name && confirmation !== stack.id) {
+      setAnsibleError('Type stack name or stack ID in the confirmation field before deleting.');
+      return;
+    }
+    setAnsibleActionStackId(`${stack.id}:delete`);
+    setAnsibleError('');
+    setAnsibleMessage('');
+    try {
+      await dashboardService.deleteAnsibleStack(stack.id, confirmation);
+      setAnsibleStacks((current) => current.filter((item) => item.id !== stack.id));
+      setAnsibleConfirmation('');
+      setAnsibleMessage('Ansible stack deleted from MC3.');
+    } catch (err) {
+      setAnsibleError(err instanceof Error ? err.message : 'Unable to delete Ansible stack.');
+    } finally {
+      setAnsibleActionStackId('');
+    }
+  }
+
+  async function importTerraformStackFromGit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!terraformGitRepoUrl.trim()) {
+      setTerraformError('Enter a Git repository URL.');
+      return;
+    }
+    setTerraformUploading(true);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      const response = await dashboardService.importTerraformStackFromGit({
+        name: terraformGitName || terraformGitRepoUrl.split('/').pop()?.replace(/\.git$/i, '') || 'git-terraform-stack',
+        description: terraformGitDescription,
+        repoUrl: terraformGitRepoUrl,
+        branch: terraformGitBranch || 'main',
+        path: terraformGitPath,
+        githubConnectorId: terraformGitGithubConnectorId || undefined,
+      });
+      setTerraformStacks((current) => [response.data.stack, ...current.filter((stack) => stack.id !== response.data.stack.id)]);
+      setTerraformGitName('');
+      setTerraformGitDescription('');
+      setTerraformGitRepoUrl('');
+      setTerraformGitBranch('main');
+      setTerraformGitPath('');
+      setTerraformGitGithubConnectorId('');
+      setTerraformMessage(response.data.message);
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to import Terraform stack from Git.');
+    } finally {
+      setTerraformUploading(false);
+    }
+  }
+
+  function promptTerraformStackReupload(stack: TerraformStack) {
+    terraformReuploadStackRef.current = stack;
+    if (terraformReuploadInputRef.current) {
+      terraformReuploadInputRef.current.value = '';
+      terraformReuploadInputRef.current.click();
+    }
+  }
+
+  async function reuploadTerraformStack(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    const stack = terraformReuploadStackRef.current;
+    event.target.value = '';
+    if (!file || !stack) {
+      return;
+    }
+
+    setTerraformActionStackId(`${stack.id}:reupload`);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      const response = await dashboardService.reuploadTerraformStack({ stackId: stack.id, file });
+      setTerraformStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
+      setTerraformMessage(response.data.message);
+      void refreshAuditLog();
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to re-upload Terraform stack ZIP.');
+    } finally {
+      terraformReuploadStackRef.current = null;
+      setTerraformActionStackId('');
     }
   }
 
@@ -10361,6 +10677,44 @@ export function DashboardPage() {
     }
   }
 
+  async function downloadTerraformStack(stack: TerraformStack) {
+    setTerraformActionStackId(`${stack.id}:download`);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      const response = await dashboardService.downloadTerraformStack(stack.id);
+      const url = URL.createObjectURL(response.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = response.fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setTerraformMessage(`Downloaded ${response.fileName}.`);
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to download Terraform stack.');
+    } finally {
+      setTerraformActionStackId('');
+    }
+  }
+
+  async function pullTerraformStackFromGit(stack: TerraformStack) {
+    setTerraformActionStackId(`${stack.id}:pull`);
+    setTerraformError('');
+    setTerraformMessage('');
+    try {
+      const response = await dashboardService.pullTerraformStackFromGit(stack.id);
+      setTerraformStacks((current) => current.map((item) => item.id === stack.id ? response.data.stack : item));
+      setTerraformMessage(response.data.message);
+      void refreshAuditLog();
+    } catch (err) {
+      setTerraformError(err instanceof Error ? err.message : 'Unable to pull latest Terraform stack from Git.');
+    } finally {
+      setTerraformActionStackId('');
+    }
+  }
+
   function updateField<K extends keyof ConnectorInput>(key: K, value: ConnectorInput[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -10402,6 +10756,8 @@ export function DashboardPage() {
       gcpClientEmail: connector.gcpClientEmail || '',
       gcpOrganizationId: connector.gcpOrganizationId || '',
       gcpBillingAccountId: connector.gcpBillingAccountId || '',
+      githubUsername: connector.githubUsername || '',
+      githubToken: '',
       region: connector.region || '',
       fingerprint: connector.fingerprint || '',
       privateKey: '',
@@ -11438,10 +11794,11 @@ export function DashboardPage() {
               className="vm-command-button vm-command-start"
               disabled={!canStart || Boolean(actionInFlight)}
               onClick={() => selectedVm && requestOperation(selectedVm, 'qemu', 'start')}
+              title="Start selected VM"
               type="button"
             >
               <span aria-hidden="true">&gt;</span>
-              Boot
+              Start
             </button>
             <button
               className="vm-command-button vm-command-stop"
@@ -11750,10 +12107,11 @@ export function DashboardPage() {
               className="vm-command-button vm-command-start"
               disabled={!canStart || Boolean(actionInFlight)}
               onClick={() => selectedContainer && requestOperation(selectedContainer, 'lxc', 'start')}
+              title="Start selected container"
               type="button"
             >
               <span aria-hidden="true">&gt;</span>
-              Boot
+              Start
             </button>
             <button
               className="vm-command-button vm-command-stop"
@@ -12547,6 +12905,7 @@ export function DashboardPage() {
             { id: 'storage', label: 'Storage', icon: 'ST' },
             { id: 'network', label: 'Network', icon: 'NW' },
             { id: 'terraformStacks', label: 'Terraform stacks', icon: 'TF' },
+            { id: 'ansibleStacks', label: 'Ansible stacks', icon: 'AS' },
           ],
         },
         {
@@ -12575,11 +12934,27 @@ export function DashboardPage() {
   const awsConnectors = connectors.filter((connector) => connector.provider === 'aws');
   const azureConnectors = connectors.filter((connector) => connector.provider === 'azure');
   const gcpConnectors = connectors.filter((connector) => connector.provider === 'gcp');
+  const githubConnectors = connectors.filter((connector) => connector.provider === 'github');
   const verifiedPveCount = pveConnectors.filter((connector) => connector.status === 'verified').length;
   const verifiedOciCount = ociConnectors.filter((connector) => connector.status === 'verified').length;
   const verifiedAwsCount = awsConnectors.filter((connector) => connector.status === 'verified').length;
   const verifiedAzureCount = azureConnectors.filter((connector) => connector.status === 'verified').length;
   const verifiedGcpCount = gcpConnectors.filter((connector) => connector.status === 'verified').length;
+  const verifiedGithubCount = githubConnectors.filter((connector) => connector.status === 'verified').length;
+  const ansibleRunHistory = ansibleStacks.flatMap((stack) =>
+    (stack.runs?.length ? stack.runs : stack.lastOutput?.length ? [{
+      id: `${stack.id}-last`,
+      action: stack.lastAction,
+      status: stack.status,
+      message: stack.lastMessage,
+      startedAt: stack.lastRunAt,
+      finishedAt: stack.updatedAt,
+      user: stack.createdBy,
+      output: stack.lastOutput,
+    }] : []).map((run) => ({ stack, run })),
+  ).sort((left, right) =>
+    new Date(right.run.finishedAt || right.run.startedAt || right.stack.updatedAt || 0).getTime()
+    - new Date(left.run.finishedAt || left.run.startedAt || left.stack.updatedAt || 0).getTime());
   const ociHomeRegion = ociInventory?.scan?.homeRegion || ociInventory?.connector.region || selectedOciConnector?.region || '';
   const ociKnownCompartments = useMemo(() => {
     const byId = new Map<string, OciCompartment>();
@@ -18735,6 +19110,52 @@ export function DashboardPage() {
                       Create Restore Point
                     </button>
                   </>
+                ) : (form.provider || 'proxmox') === 'github' ? (
+                  <>
+                    <label className="block lg:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">GitHub Username</span>
+                      <input
+                        className="pm-input mt-2 w-full"
+                        placeholder="github-user"
+                        value={form.githubUsername || ''}
+                        onChange={(event) => updateField('githubUsername', event.target.value)}
+                      />
+                    </label>
+
+                    <label className="block lg:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Personal Access Token</span>
+                      <input
+                        className="pm-input mt-2 w-full"
+                        placeholder={editingId ? 'Leave blank to keep saved token' : 'Fine-grained token with repository read access'}
+                        type="password"
+                        value={form.githubToken || ''}
+                        onChange={(event) => updateField('githubToken', event.target.value)}
+                      />
+                    </label>
+                  </>
+                ) : (form.provider || 'proxmox') === 'github' ? (
+                  <>
+                    <label className="block lg:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">GitHub Username</span>
+                      <input
+                        className="pm-input mt-2 w-full"
+                        placeholder="github-user"
+                        value={form.githubUsername || ''}
+                        onChange={(event) => updateField('githubUsername', event.target.value)}
+                      />
+                    </label>
+
+                    <label className="block lg:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Personal Access Token</span>
+                      <input
+                        className="pm-input mt-2 w-full"
+                        placeholder={editingId ? 'Leave blank to keep saved token' : 'Fine-grained token with repository read access'}
+                        type="password"
+                        value={form.githubToken || ''}
+                        onChange={(event) => updateField('githubToken', event.target.value)}
+                      />
+                    </label>
+                  </>
                 ) : (
                   <>
                     <label className="form-label">{azureVmDrawer === 'snapshot' ? 'Snapshot name' : 'Image name'}</label>
@@ -23238,6 +23659,13 @@ export function DashboardPage() {
             }} type="button">
               Manage GCP connectors
             </button>
+            <button className="pm-button" onClick={() => {
+              setActiveCloud('pve');
+              setActiveTab('connectors');
+              setForm((current) => ({ ...current, provider: 'github', name: current.name || 'GitHub Terraform repos' }));
+            }} type="button">
+              Manage GitHub connectors
+            </button>
           </footer>
         </section>
       </main>
@@ -24179,9 +24607,90 @@ export function DashboardPage() {
                   </button>
                 </div>
               </form>
+              <input
+                accept=".zip,application/zip,application/x-zip-compressed"
+                className="hidden"
+                onChange={reuploadTerraformStack}
+                ref={terraformReuploadInputRef}
+                type="file"
+              />
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 Do not put long-lived plaintext secrets in Terraform files. Prefer variable files scoped to this stack and rotate Proxmox tokens after testing.
               </div>
+            </section>
+
+            <section className="pm-card p-5">
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-slate-950">Import from Git</h3>
+                <p className="text-sm text-slate-600">Create a stack from a Git repository and refresh it later with Pull Latest.</p>
+              </div>
+              <form className="grid gap-4 lg:grid-cols-[1fr_1.4fr_.7fr_.8fr]" onSubmit={importTerraformStackFromGit}>
+                <label className="text-sm font-medium text-slate-700">
+                  Stack Name
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformGitName(event.target.value)}
+                    placeholder="orcldb"
+                    value={terraformGitName}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Repository URL
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformGitRepoUrl(event.target.value)}
+                    placeholder="https://github.com/user/repo.git"
+                    value={terraformGitRepoUrl}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Branch
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformGitBranch(event.target.value)}
+                    placeholder="main"
+                    value={terraformGitBranch}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Stack Path
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformGitPath(event.target.value)}
+                    placeholder="terraform/orcldb"
+                    value={terraformGitPath}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  GitHub Connector
+                  <select
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformGitGithubConnectorId(event.target.value)}
+                    value={terraformGitGithubConnectorId}
+                  >
+                    <option value="">None / public repo</option>
+                    {githubConnectors.map((connector) => (
+                      <option key={connector.id} value={connector.id}>
+                        {connector.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-slate-700 lg:col-span-3">
+                  Description
+                  <input
+                    className="pm-input mt-1"
+                    onChange={(event) => setTerraformGitDescription(event.target.value)}
+                    placeholder="Git-backed Terraform stack"
+                    value={terraformGitDescription}
+                  />
+                </label>
+                <div className="flex items-end">
+                  <button className="pm-button-primary w-full" disabled={terraformUploading || !terraformGitRepoUrl.trim()} type="submit">
+                    {terraformUploading ? 'Importing...' : 'Import Git Stack'}
+                  </button>
+                </div>
+              </form>
             </section>
 
             {terraformMessage ? (
@@ -24211,7 +24720,7 @@ export function DashboardPage() {
                 <table className="pm-table">
                   <thead>
                     <tr>
-                      {['Stack', 'Status', 'Working Dir', 'Files', 'Last Message', 'Updated', 'Actions'].map((heading) => (
+                      {['Stack', 'Source', 'Status', 'Working Dir', 'Files', 'Last Message', 'Updated', 'Actions'].map((heading) => (
                         <th key={heading}>{heading}</th>
                       ))}
                     </tr>
@@ -24224,6 +24733,14 @@ export function DashboardPage() {
                           <td className="font-medium text-slate-900">
                             {stack.name}
                             <p className="text-xs text-slate-500">{stack.description || stack.id}</p>
+                          </td>
+                          <td className="max-w-xs text-xs text-slate-600">
+                            <span className="pm-status bg-slate-100 text-slate-700">{stack.sourceType === 'git' ? 'Git' : 'ZIP'}</span>
+                            {stack.sourceType === 'git' ? (
+                              <p className="mt-1 truncate" title={`${stack.git?.repoUrl || ''}${stack.git?.path ? ` (${stack.git.path})` : ''}`}>
+                                {stack.git?.branch || 'main'} {stack.git?.path ? `- ${stack.git.path}` : ''}
+                              </p>
+                            ) : null}
                           </td>
                           <td>
                             <span className={`pm-status ${
@@ -24259,6 +24776,21 @@ export function DashboardPage() {
                                   onClick: () => void runTerraformStack(stack, 'plan'),
                                 },
                                 {
+                                  label: 'Download ZIP',
+                                  disabled: busy,
+                                  onClick: () => void downloadTerraformStack(stack),
+                                },
+                                {
+                                  label: 'Re-upload ZIP',
+                                  disabled: busy || stack.sourceType === 'git',
+                                  onClick: () => promptTerraformStackReupload(stack),
+                                },
+                                {
+                                  label: 'Pull Latest',
+                                  disabled: busy || stack.sourceType !== 'git',
+                                  onClick: () => void pullTerraformStackFromGit(stack),
+                                },
+                                {
                                   label: 'Deploy',
                                   tone: 'primary',
                                   disabled: busy,
@@ -24283,7 +24815,7 @@ export function DashboardPage() {
                       );
                     }) : (
                       <tr>
-                        <td className="px-3 py-6 text-sm text-slate-600" colSpan={7}>
+                        <td className="px-3 py-6 text-sm text-slate-600" colSpan={8}>
                           No Terraform stacks uploaded yet.
                         </td>
                       </tr>
@@ -24294,6 +24826,115 @@ export function DashboardPage() {
             </section>
 
             {terraformStacks.some((stack) => (stack.runs?.length || stack.lastOutput?.length)) ? (
+              <section className="pm-panel overflow-hidden p-0">
+                <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Deployment Logs</h3>
+                    <p className="text-sm text-slate-600">Every validate, plan, deploy, and destroy run is kept separately for review.</p>
+                  </div>
+                  <button className="pm-button" disabled={terraformLoading} onClick={() => void loadTerraformStacks()} type="button">
+                    Refresh Logs
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="pm-table min-w-[980px]">
+                    <thead>
+                      <tr>
+                        {['Stack', 'Action', 'Status', 'Started', 'Duration', 'Lines', 'Summary', 'Details'].map((heading) => (
+                          <th key={heading}>{heading}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {terraformStacks.flatMap((stack) => {
+                        const runs: TerraformStackRun[] = stack.runs?.length
+                          ? stack.runs
+                          : stack.lastOutput?.length
+                            ? [{
+                                id: `${stack.id}-latest`,
+                                action: stack.lastAction,
+                                status: stack.status,
+                                message: stack.lastMessage,
+                                startedAt: stack.lastRunAt,
+                                finishedAt: stack.status === 'running' ? null : stack.updatedAt,
+                                output: stack.lastOutput,
+                              }]
+                            : [];
+                        return runs.map((run) => ({ stack, run, rowId: `${stack.id}-${run.id}` }));
+                      }).slice(0, 20).map(({ stack, run, rowId }) => {
+                        const expanded = expandedTerraformLogId === rowId;
+                        const output = (run.output || []).map(stripAnsiCodes);
+                        const summaryLine = [...output].reverse().find((line: string) => line.trim() && !line.startsWith('terraform_data.') && !line.startsWith('proxmox_virtual_environment_'));
+                        return (
+                          <Fragment key={rowId}>
+                            <tr>
+                              <td className="font-medium text-slate-900">
+                                {stack.name}
+                                <p className="max-w-56 truncate text-xs font-normal text-slate-500">{stack.id}</p>
+                              </td>
+                              <td className="font-semibold uppercase text-slate-700">{run.action || '-'}</td>
+                              <td>
+                                <span className={`pm-status ${terraformRunStatusClass(run.status || stack.status)}`}>
+                                  {run.status || stack.status || '-'}
+                                </span>
+                              </td>
+                              <td className="whitespace-nowrap">{run.startedAt ? formatDate(run.startedAt) : '-'}</td>
+                              <td className="whitespace-nowrap">{formatDuration(run.startedAt, run.finishedAt)}</td>
+                              <td className="whitespace-nowrap">{output.length.toLocaleString()}</td>
+                              <td className="max-w-md">
+                                <p className="truncate text-sm text-slate-700">{run.message || stack.lastMessage || '-'}</p>
+                                {summaryLine ? <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{summaryLine}</p> : null}
+                              </td>
+                              <td className="text-right">
+                                <button
+                                  aria-expanded={expanded}
+                                  className="pm-button pm-button-compact"
+                                  onClick={() => setExpandedTerraformLogId(expanded ? '' : rowId)}
+                                  type="button"
+                                >
+                                  {expanded ? 'Hide Detail' : 'View Detail'}
+                                </button>
+                              </td>
+                            </tr>
+                            {expanded ? (
+                              <tr className="terraform-log-detail-row" key={`${rowId}-detail`}>
+                                <td colSpan={8}>
+                                  <div className="terraform-log-detail">
+                                    <div className="mb-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-4">
+                                      <div>
+                                        <span className="block font-semibold uppercase text-slate-500">Run ID</span>
+                                        <span className="font-mono">{run.id}</span>
+                                      </div>
+                                      <div>
+                                        <span className="block font-semibold uppercase text-slate-500">Started</span>
+                                        <span>{run.startedAt ? formatDate(run.startedAt) : '-'}</span>
+                                      </div>
+                                      <div>
+                                        <span className="block font-semibold uppercase text-slate-500">Finished</span>
+                                        <span>{run.finishedAt ? formatDate(run.finishedAt) : run.status === 'running' ? 'Still running' : '-'}</span>
+                                      </div>
+                                      <div>
+                                        <span className="block font-semibold uppercase text-slate-500">User</span>
+                                        <span>{run.user || '-'}</span>
+                                      </div>
+                                    </div>
+                                    <pre className="terraform-log-output">
+                                      {output.join('\n') || 'No output captured.'}
+                                    </pre>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : null}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
+
+            {false && terraformStacks.some((stack) => (stack.runs?.length || stack.lastOutput?.length)) ? (
               <section className="pm-panel">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -24337,6 +24978,282 @@ export function DashboardPage() {
                       </pre>
                     </article>
                   ))}
+                </div>
+              </section>
+            ) : null}
+          </>
+        ) : null}
+
+        {activeTab === 'ansibleStacks' ? (
+          <>
+            <section className="pm-panel">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ansible Stacks</p>
+                  <h2 className="text-lg font-semibold text-slate-950">Upload or import Ansible projects</h2>
+                  <p className="max-w-3xl text-sm text-slate-600">
+                    Upload an Ansible ZIP or import a Git repository. MC3 extracts the stack, detects inventories and playbooks, and can run an Ansible syntax check from the backend.
+                  </p>
+                </div>
+                <button
+                  className="pm-button"
+                  disabled={ansibleLoading || ansibleSshLoading}
+                  onClick={() => {
+                    void loadAnsibleStacks();
+                    void loadAnsibleSshIdentity();
+                  }}
+                  type="button"
+                >
+                  {ansibleLoading || ansibleSshLoading ? 'Refreshing...' : 'Refresh'}
+                </button>
+              </div>
+            </section>
+
+            <section className="pm-panel">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                <div className="max-w-4xl">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Passwordless SSH Identity</p>
+                  <h3 className="text-base font-semibold text-slate-950">Install this public key on Ansible target hosts</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    MC3 generated and stores the private key on the backend only. Add the public key below to each target user's <span className="font-mono text-xs">~/.ssh/authorized_keys</span>, then set your inventory user normally.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="pm-button" disabled={!ansibleSshIdentity?.publicKey || ansibleSshLoading} onClick={() => void copyAnsiblePublicKey()} type="button">
+                    {ansibleSshCopied ? 'Copied' : 'Copy Public Key'}
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Public Key</p>
+                  <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-all rounded-md border border-slate-200 bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100">
+                    {ansibleSshLoading ? 'Generating SSH identity...' : ansibleSshIdentity?.publicKey || 'SSH identity is not available.'}
+                  </pre>
+                </div>
+                <dl className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fingerprint</dt>
+                    <dd className="mt-1 break-all font-mono text-xs text-slate-800">{ansibleSshIdentity?.fingerprint || '-'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Backend Private Key Path</dt>
+                    <dd className="mt-1 break-all font-mono text-xs text-slate-800">{ansibleSshIdentity?.privateKeyPath || '-'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Inventory Hint</dt>
+                    <dd className="mt-1 break-all font-mono text-xs text-slate-800">
+                      ansible_ssh_private_key_file={ansibleSshIdentity?.privateKeyPath || '/app/backend/data/ansible-ssh/id_ed25519'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </section>
+
+            <section className="grid gap-4 md:grid-cols-3">
+              <SummaryCard label="Ansible Stacks" value={ansibleStacks.length} detail={`${ansibleStacks.filter((stack) => stack.sourceType === 'git').length} Git backed`} tone="cyan" />
+              <SummaryCard label="Playbooks" value={ansibleStacks.reduce((total, stack) => total + (stack.playbooks?.length || 0), 0)} detail="Detected YAML playbooks" tone="emerald" />
+              <SummaryCard label="Syntax Checks" value={ansibleStacks.filter((stack) => stack.lastAction === 'syntax-check').length} detail="Runs from backend Ansible CLI" tone="indigo" />
+            </section>
+
+            <section className="pm-card p-5">
+              <form className="grid gap-4 lg:grid-cols-[1fr_1fr_1fr_1fr_1.5fr_auto]" onSubmit={uploadAnsibleStack}>
+                <label className="text-sm font-medium text-slate-700">
+                  Stack Name
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleUploadName(event.target.value)} placeholder="linux-baseline" value={ansibleUploadName} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Description
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleUploadDescription(event.target.value)} placeholder="OS hardening roles" value={ansibleUploadDescription} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Inventory Path
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleUploadInventoryPath(event.target.value)} placeholder="inventory.ini" value={ansibleUploadInventoryPath} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Playbook Path
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleUploadPlaybookPath(event.target.value)} placeholder="site.yml" value={ansibleUploadPlaybookPath} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  ZIP File
+                  <input accept=".zip,application/zip,application/x-zip-compressed" className="pm-input mt-1" onChange={(event) => setAnsibleUploadFile(event.target.files?.[0] || null)} type="file" />
+                </label>
+                <div className="flex items-end">
+                  <button className="pm-button-primary w-full" disabled={ansibleUploading || !ansibleUploadFile} type="submit">
+                    {ansibleUploading ? 'Uploading...' : 'Upload Stack'}
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="pm-card p-5">
+              <div className="mb-4">
+                <h3 className="text-base font-semibold text-slate-950">Import from Git</h3>
+                <p className="text-sm text-slate-600">Create an Ansible stack from a Git repository and refresh it later with Pull Latest.</p>
+              </div>
+              <form className="grid gap-4 lg:grid-cols-[1fr_1.4fr_.7fr_.8fr_.8fr_.8fr_1fr_auto]" onSubmit={importAnsibleStackFromGit}>
+                <label className="text-sm font-medium text-slate-700">
+                  Stack Name
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitName(event.target.value)} placeholder="linux-baseline" value={ansibleGitName} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Repository URL
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitRepoUrl(event.target.value)} placeholder="https://github.com/user/repo.git" value={ansibleGitRepoUrl} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Branch
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitBranch(event.target.value)} placeholder="main" value={ansibleGitBranch} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Stack Path
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitPath(event.target.value)} placeholder="ansible" value={ansibleGitPath} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Inventory
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitInventoryPath(event.target.value)} placeholder="inventory.ini" value={ansibleGitInventoryPath} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  Playbook
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitPlaybookPath(event.target.value)} placeholder="site.yml" value={ansibleGitPlaybookPath} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">
+                  GitHub Connector
+                  <select
+                    className="pm-input mt-1"
+                    onChange={(event) => setAnsibleGitGithubConnectorId(event.target.value)}
+                    value={ansibleGitGithubConnectorId}
+                  >
+                    <option value="">None / public repo</option>
+                    {githubConnectors.map((connector) => (
+                      <option key={connector.id} value={connector.id}>
+                        {connector.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex items-end">
+                  <button className="pm-button-primary w-full" disabled={ansibleUploading || !ansibleGitRepoUrl.trim()} type="submit">
+                    {ansibleUploading ? 'Importing...' : 'Import Git Stack'}
+                  </button>
+                </div>
+                <label className="text-sm font-medium text-slate-700 lg:col-span-7">
+                  Description
+                  <input className="pm-input mt-1" onChange={(event) => setAnsibleGitDescription(event.target.value)} placeholder="Git-backed Ansible stack" value={ansibleGitDescription} />
+                </label>
+              </form>
+            </section>
+
+            {ansibleMessage ? <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{ansibleMessage}</div> : null}
+            {ansibleError ? <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{ansibleError}</div> : null}
+
+            <section className="pm-card">
+              <div className="border-b border-slate-200 p-4">
+                <label className="text-sm font-medium text-slate-700">
+                  Confirmation for delete
+                  <input className="pm-input mt-1 max-w-xl" onChange={(event) => setAnsibleConfirmation(event.target.value)} placeholder="Type stack name or stack ID" value={ansibleConfirmation} />
+                </label>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="pm-table min-w-[980px]">
+                  <thead>
+                    <tr>
+                      {['Stack', 'Source', 'Status', 'Working Dir', 'Inventory', 'Playbook', 'Last Message', 'Actions'].map((heading) => (
+                        <th key={heading}>{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ansibleStacks.length ? ansibleStacks.map((stack) => {
+                      const busy = ansibleActionStackId.startsWith(`${stack.id}:`);
+                      return (
+                      <tr key={stack.id}>
+                        <td className="font-medium text-slate-900">
+                          {stack.name}
+                          <p className="text-xs text-slate-500">{stack.description || stack.id}</p>
+                        </td>
+                        <td className="max-w-xs text-xs text-slate-600">
+                          <span className="pm-status bg-slate-100 text-slate-700">{stack.sourceType === 'git' ? 'Git' : 'ZIP'}</span>
+                          {stack.sourceType === 'git' ? <p className="mt-1 truncate">{stack.git?.branch || 'main'} {stack.git?.path ? `- ${stack.git.path}` : ''}</p> : null}
+                        </td>
+                        <td>
+                          <span className={`pm-status ${terraformRunStatusClass(stack.status)}`}>
+                            {stack.status}
+                          </span>
+                        </td>
+                        <td className="text-xs text-slate-600">{stack.workingDir || '-'}</td>
+                        <td className="break-all text-xs text-slate-600">{stack.inventoryPath || '-'}</td>
+                        <td className="break-all text-xs text-slate-600">{stack.playbookPath || stack.playbooks?.[0] || '-'}</td>
+                        <td className="max-w-md text-sm text-slate-700">{stack.lastMessage || '-'}</td>
+                        <td>
+                          <ActionMenu
+                            items={[
+                              { label: busy ? 'Working...' : 'Syntax Check', disabled: busy, onClick: () => void validateAnsibleStack(stack) },
+                              { label: 'Run Playbook', disabled: busy, onClick: () => void runAnsibleStack(stack) },
+                              { label: 'Pull Latest', disabled: busy || stack.sourceType !== 'git', onClick: () => void pullAnsibleStackFromGit(stack) },
+                              { label: 'Delete from MC3', tone: 'danger', disabled: busy, onClick: () => void removeAnsibleStack(stack) },
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td className="px-3 py-6 text-sm text-slate-600" colSpan={8}>
+                          No Ansible stacks uploaded or imported yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            {ansibleRunHistory.length ? (
+              <section className="pm-panel overflow-hidden p-0">
+                <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Ansible Logs</h3>
+                    <p className="text-sm text-slate-600">Syntax checks and playbook runs are retained per stack.</p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="pm-table min-w-[860px]">
+                    <thead>
+                      <tr>
+                        {['Stack', 'Action', 'Status', 'Updated', 'Output', 'Details'].map((heading) => <th key={heading}>{heading}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ansibleRunHistory.map(({ stack, run }) => {
+                        const rowId = `${stack.id}:${run.id}`;
+                        const expanded = expandedAnsibleLogId === rowId;
+                        const output = (run.output || []).map(stripAnsiCodes);
+                        return (
+                          <Fragment key={rowId}>
+                            <tr>
+                              <td className="font-medium text-slate-900">{stack.name}</td>
+                              <td className="font-semibold uppercase text-slate-700">{run.action || '-'}</td>
+                              <td><span className={`pm-status ${terraformRunStatusClass(run.status)}`}>{run.status}</span></td>
+                              <td>{formatDate(run.finishedAt || run.startedAt)}</td>
+                              <td className="max-w-md truncate text-sm text-slate-700">{output[output.length - 1] || '-'}</td>
+                              <td className="text-right">
+                                <button className="pm-button pm-button-compact" onClick={() => setExpandedAnsibleLogId(expanded ? '' : rowId)} type="button">
+                                  {expanded ? 'Hide Detail' : 'View Detail'}
+                                </button>
+                              </td>
+                            </tr>
+                            {expanded ? (
+                              <tr className="terraform-log-detail-row">
+                                <td colSpan={6}>
+                                  <pre className="terraform-log-output">{output.join('\n') || 'No output captured.'}</pre>
+                                </td>
+                              </tr>
+                            ) : null}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </section>
             ) : null}
@@ -25792,7 +26709,7 @@ export function DashboardPage() {
             <section className="pm-panel">
               <div className="mb-5">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Infrastructure Connectors</p>
-                <h2 className="text-lg font-semibold text-slate-950">Add and secure Proxmox, OCI, AWS, Azure, or GCP access</h2>
+                <h2 className="text-lg font-semibold text-slate-950">Add and secure Proxmox, OCI, AWS, Azure, GCP, or GitHub access</h2>
                 <p className="text-sm text-slate-600">
                   Connector secrets are stored only on the backend and are encrypted at rest.
                 </p>
@@ -25821,16 +26738,17 @@ export function DashboardPage() {
                     <option value="proxmox">Proxmox</option>
                     <option value="oci">Oracle Cloud Infrastructure</option>
                     <option value="aws">Amazon Web Services</option>
-                    <option value="azure">Microsoft Azure</option>
-                    <option value="gcp">Google Cloud Platform</option>
-                  </select>
+                  <option value="azure">Microsoft Azure</option>
+                  <option value="gcp">Google Cloud Platform</option>
+                  <option value="github">GitHub</option>
+                </select>
                 </label>
 
                 <label className="block">
                   <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Name</span>
                   <input
                     className="pm-input mt-2 w-full"
-                    placeholder={(form.provider || 'proxmox') === 'oci' ? 'Production OCI tenancy' : (form.provider || 'proxmox') === 'aws' ? 'Production AWS account' : (form.provider || 'proxmox') === 'azure' ? 'Production Azure subscription' : (form.provider || 'proxmox') === 'gcp' ? 'Production GCP project' : 'Production Cluster'}
+                    placeholder={(form.provider || 'proxmox') === 'oci' ? 'Production OCI tenancy' : (form.provider || 'proxmox') === 'aws' ? 'Production AWS account' : (form.provider || 'proxmox') === 'azure' ? 'Production Azure subscription' : (form.provider || 'proxmox') === 'gcp' ? 'Production GCP project' : (form.provider || 'proxmox') === 'github' ? 'GitHub PAT connector' : 'Production Cluster'}
                     value={form.name}
                     onChange={(event) => updateField('name', event.target.value)}
                   />
@@ -26118,6 +27036,29 @@ export function DashboardPage() {
                       />
                     </label>
                   </>
+                ) : (form.provider || 'proxmox') === 'github' ? (
+                  <>
+                    <label className="block lg:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">GitHub Username</span>
+                      <input
+                        className="pm-input mt-2 w-full"
+                        placeholder="your-github-login"
+                        value={form.githubUsername || ''}
+                        onChange={(event) => updateField('githubUsername', event.target.value)}
+                      />
+                    </label>
+
+                    <label className="block lg:col-span-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Personal Access Token</span>
+                      <input
+                        className="pm-input mt-2 w-full"
+                        placeholder={editingId ? 'Leave blank to keep saved token' : 'github_pat_...'}
+                        type="password"
+                        value={form.githubToken || ''}
+                        onChange={(event) => updateField('githubToken', event.target.value)}
+                      />
+                    </label>
+                  </>
                 ) : (
                   <>
                     <label className="block lg:col-span-2">
@@ -26255,7 +27196,7 @@ export function DashboardPage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="font-semibold text-slate-950">{connector.name}</h3>
                             <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold uppercase text-slate-600">
-                              {(connector.provider || 'proxmox') === 'oci' ? 'OCI' : connector.provider === 'aws' ? 'AWS' : connector.provider === 'azure' ? 'Azure' : connector.provider === 'gcp' ? 'GCP' : 'Proxmox'}
+                              {(connector.provider || 'proxmox') === 'oci' ? 'OCI' : connector.provider === 'aws' ? 'AWS' : connector.provider === 'azure' ? 'Azure' : connector.provider === 'gcp' ? 'GCP' : connector.provider === 'github' ? 'GitHub' : 'Proxmox'}
                             </span>
                             <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold uppercase text-slate-600">
                               {(connector.provider || 'proxmox') === 'oci'
@@ -26266,6 +27207,8 @@ export function DashboardPage() {
                                     ? 'Service principal'
                                     : connector.provider === 'gcp'
                                       ? 'Service account'
+                                      : connector.provider === 'github'
+                                        ? 'PAT'
                                     : connector.authType === 'apiToken' ? 'API token' : 'Password'}
                             </span>
                             <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${statusClass(connector.status)}`}>
@@ -26286,6 +27229,8 @@ export function DashboardPage() {
                                   ? `${connector.azureSubscriptionName || connector.azureSubscriptionId || 'subscription pending verification'} / ${connector.azureTenantId || '-'}`
                                   : connector.provider === 'gcp'
                                     ? `${connector.gcpProjectName || connector.gcpProjectId || 'project pending verification'} / ${connector.gcpClientEmail || '-'}`
+                                    : connector.provider === 'github'
+                                      ? `${connector.githubUsername || '-'} / GitHub repositories`
                                   : `${connector.username}@${connector.host}:${connector.port}`}
                           </p>
                         </div>
@@ -26326,16 +27271,16 @@ export function DashboardPage() {
                       <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 sm:grid-cols-4">
                         <div>
                           <p className="font-semibold uppercase text-slate-500">
-                            {(connector.provider || 'proxmox') === 'oci' ? 'Region' : connector.provider === 'azure' ? 'Cloud' : connector.provider === 'gcp' ? 'Project Number' : 'Realm'}
+                            {(connector.provider || 'proxmox') === 'oci' ? 'Region' : connector.provider === 'azure' ? 'Cloud' : connector.provider === 'gcp' ? 'Project Number' : connector.provider === 'github' ? 'Provider' : 'Realm'}
                           </p>
-                          <p className="mt-1">{(connector.provider || 'proxmox') === 'oci' || connector.provider === 'aws' ? connector.region || '-' : connector.provider === 'azure' ? connector.azureCloud || 'public' : connector.provider === 'gcp' ? connector.gcpProjectNumber || '-' : connector.realm}</p>
+                          <p className="mt-1 break-all">{(connector.provider || 'proxmox') === 'oci' || connector.provider === 'aws' ? connector.region || '-' : connector.provider === 'azure' ? connector.azureCloud || 'public' : connector.provider === 'gcp' ? connector.gcpProjectNumber || '-' : connector.provider === 'github' ? 'github.com' : connector.realm}</p>
                         </div>
                         <div>
                           <p className="font-semibold uppercase text-slate-500">
-                            {(connector.provider || 'proxmox') === 'oci' ? 'Fingerprint' : connector.provider === 'aws' ? 'Access Key ID' : connector.provider === 'azure' ? 'Client ID' : connector.provider === 'gcp' ? 'Client Email' : 'Token ID'}
+                            {(connector.provider || 'proxmox') === 'oci' ? 'Fingerprint' : connector.provider === 'aws' ? 'Access Key ID' : connector.provider === 'azure' ? 'Client ID' : connector.provider === 'gcp' ? 'Client Email' : connector.provider === 'github' ? 'Username' : 'Token ID'}
                           </p>
                           <p className="mt-1 break-all">
-                            {(connector.provider || 'proxmox') === 'oci' ? connector.fingerprint || '-' : connector.provider === 'aws' ? connector.awsAccessKeyId || '-' : connector.provider === 'azure' ? connector.azureClientId || '-' : connector.provider === 'gcp' ? connector.gcpClientEmail || '-' : connector.apiTokenId || 'Not used'}
+                            {(connector.provider || 'proxmox') === 'oci' ? connector.fingerprint || '-' : connector.provider === 'aws' ? connector.awsAccessKeyId || '-' : connector.provider === 'azure' ? connector.azureClientId || '-' : connector.provider === 'gcp' ? connector.gcpClientEmail || '-' : connector.provider === 'github' ? connector.githubUsername || '-' : connector.apiTokenId || 'Not used'}
                           </p>
                         </div>
                         <div>
